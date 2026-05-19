@@ -1,5 +1,4 @@
 import { EventType } from 'nearbytes-crypto';
-import { defaultPathMapper } from 'nearbytes-storage';
 import { createEncryptedData } from 'nearbytes-crypto';
 import { createSymmetricKey } from 'nearbytes-crypto';
 import { computeHash } from 'nearbytes-crypto';
@@ -7,21 +6,16 @@ import { serializeEventEnvelope } from 'nearbytes-log';
 import { createSignedEvent, hydrateSignedEvent } from 'nearbytes-log';
 /**
  * Sets up a new channel from a secret
+ * Derives keys and returns the public key (no storage concerns)
  * @param secret - Channel secret (e.g., "channelname:password")
  * @param crypto - Cryptographic operations
- * @param storage - Storage backend
- * @param pathMapper - Function to map public key to channel path
- * @returns Public key and channel path
+ * @returns Public key
  */
-export async function setupChannel(secret, crypto, storage, pathMapper = defaultPathMapper) {
+export async function setupChannel(secret, crypto) {
     // Derive key pair from secret
     const keyPair = await crypto.deriveKeys(secret);
-    // Create channel directory
-    const channelPath = pathMapper(keyPair.publicKey);
-    await storage.createDirectory(channelPath);
     return {
         publicKey: keyPair.publicKey,
-        channelPath,
     };
 }
 /**

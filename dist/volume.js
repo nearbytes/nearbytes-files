@@ -1,29 +1,23 @@
 import { EventType } from 'nearbytes-crypto';
-import { createVolume } from 'nearbytes-storage';
-import { defaultPathMapper } from 'nearbytes-storage';
 import { serializeEventEnvelope } from 'nearbytes-log';
 import { eventEnvelopePublicKeyMatches, hydrateSignedEvent } from 'nearbytes-log';
 /**
  * Opens a volume from a secret
- * Derives keys, creates volume object, and ensures storage directory exists
+ * Derives keys and returns a volume object (no storage concerns)
  *
  * This is a pure function: same secret always produces same volume
  *
  * @param secret - Volume secret
  * @param crypto - Cryptographic operations
- * @param storage - Storage backend
- * @param pathMapper - Function to map public key to volume path
  * @returns Volume object
  */
-export async function openVolume(secret, crypto, storage, pathMapper = defaultPathMapper) {
+export async function openVolume(secret, crypto) {
     // Derive key pair from secret (deterministic)
     const keyPair = await crypto.deriveKeys(secret);
-    // Derive storage path from public key (deterministic)
-    const path = pathMapper(keyPair.publicKey);
-    // Ensure directory exists (idempotent)
-    await storage.createDirectory(path);
-    // Create and return volume
-    return createVolume(secret, keyPair.publicKey, path);
+    return {
+        publicKey: keyPair.publicKey,
+        secret,
+    };
 }
 /**
  * Loads all events from a volume's event log

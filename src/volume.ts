@@ -1,44 +1,60 @@
-import type { Secret } from 'nearbytes-crypto';
+import type { Secret, PublicKey, Hash } from 'nearbytes-crypto';
 import { EventType } from 'nearbytes-crypto';
 import type { CryptoOperations } from 'nearbytes-crypto';
-import type { StorageBackend, ChannelPathMapper } from 'nearbytes-storage';
-import type { Volume, FileSystemState, FileMetadata } from 'nearbytes-storage';
 import type { EventLogEntry } from 'nearbytes-log';
-import { createVolume } from 'nearbytes-storage';
 import { type Log } from 'nearbytes-log';
-import { defaultPathMapper } from 'nearbytes-storage';
 import { serializeEventEnvelope } from 'nearbytes-log';
 import { eventEnvelopePublicKeyMatches, hydrateSignedEvent } from 'nearbytes-log';
 
 /**
+ * Volume represents a Nearbytes volume
+ * A volume is deterministically derived from a secret seed
+ * and materializes a file system through event log replay
+ */
+export interface Volume {
+  readonly publicKey: PublicKey;
+  readonly secret: Secret;
+}
+
+/**
+ * File metadata stored in the volume (low-level, from volume replay)
+ * Represents a file that exists in the materialized file system
+ */
+export interface VolumeFileMetadata {
+  readonly name: string;
+  readonly contentAddress: Hash;
+  readonly eventHash: Hash;
+}
+
+/**
+ * Materialized file system state
+ * Represents the current state of files in a volume after replaying all events
+ */
+export interface VolumeFileSystemState {
+  readonly files: ReadonlyMap<string, VolumeFileMetadata>;
+}
+
+/**
  * Opens a volume from a secret
- * Derives keys, creates volume object, and ensures storage directory exists
+ * Derives keys and returns a volume object (no storage concerns)
  *
  * This is a pure function: same secret always produces same volume
  *
  * @param secret - Volume secret
  * @param crypto - Cryptographic operations
- * @param storage - Storage backend
- * @param pathMapper - Function to map public key to volume path
  * @returns Volume object
  */
 export async function openVolume(
   secret: Secret,
-  crypto: CryptoOperations,
-  storage: StorageBackend,
-  pathMapper: ChannelPathMapper = defaultPathMapper
+  crypto: CryptoOperations
 ): Promise<Volume> {
   // Derive key pair from secret (deterministic)
   const keyPair = await crypto.deriveKeys(secret);
 
-  // Derive storage path from public key (deterministic)
-  const path = pathMapper(keyPair.publicKey);
-
-  // Ensure directory exists (idempotent)
-  await storage.createDirectory(path);
-
-  // Create and return volume
-  return createVolume(secret, keyPair.publicKey, path);
+  return {
+    publicKey: keyPair.publicKey,
+    secret,
+  };
 }
 
 /**
@@ -125,8 +141,8 @@ export async function verifyEventLog(
  * @param entries - Event log entries (must be sorted and verified)
  * @returns Materialized file system state
  */
-export function replayEvents(entries: EventLogEntry[]): FileSystemState {
-  const files = new Map<string, FileMetadata>();
+export function replayEvents(entries: EventLogEntry[]): VolumeFileSystemState {
+  const files = new Map<string, VolumeFileMetadata>();
 
   for (const entry of entries) {
     const { signedEvent } = entry;
@@ -176,7 +192,7 @@ export async function materializeVolume(
   volume: Volume,
   channelStorage: Log,
   crypto: CryptoOperations
-): Promise<FileSystemState> {
+): Promise<VolumeFileSystemState> {
   // 1. Load all events
   const entries = await loadEventLog(volume, channelStorage, crypto);
 
@@ -195,9 +211,9 @@ export async function materializeVolume(
  * @returns File metadata, or undefined if file doesn't exist
  */
 export function getFile(
-  fileSystemState: FileSystemState,
+  fileSystemState: VolumeFileSystemState,
   fileName: string
-): FileMetadata | undefined {
+): VolumeFileMetadata | undefined {
   return fileSystemState.files.get(fileName);
 }
 
@@ -207,7 +223,7 @@ export function getFile(
  * @param fileSystemState - Materialized file system state
  * @returns Array of file metadata, sorted by file name
  */
-export function listFiles(fileSystemState: FileSystemState): FileMetadata[] {
+export function listFiles(fileSystemState: VolumeFileSystemState): VolumeFileMetadata[] {
   const files = Array.from(fileSystemState.files.values());
   files.sort((a, b) => {
     if (a.name < b.name) return -1;

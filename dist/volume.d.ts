@@ -1,22 +1,43 @@
-import type { Secret } from 'nearbytes-crypto';
+import type { Secret, PublicKey, Hash } from 'nearbytes-crypto';
 import type { CryptoOperations } from 'nearbytes-crypto';
-import type { StorageBackend, ChannelPathMapper } from 'nearbytes-storage';
-import type { Volume, FileSystemState, FileMetadata } from 'nearbytes-storage';
 import type { EventLogEntry } from 'nearbytes-log';
 import { type Log } from 'nearbytes-log';
 /**
+ * Volume represents a Nearbytes volume
+ * A volume is deterministically derived from a secret seed
+ * and materializes a file system through event log replay
+ */
+export interface Volume {
+    readonly publicKey: PublicKey;
+    readonly secret: Secret;
+}
+/**
+ * File metadata stored in the volume (low-level, from volume replay)
+ * Represents a file that exists in the materialized file system
+ */
+export interface VolumeFileMetadata {
+    readonly name: string;
+    readonly contentAddress: Hash;
+    readonly eventHash: Hash;
+}
+/**
+ * Materialized file system state
+ * Represents the current state of files in a volume after replaying all events
+ */
+export interface VolumeFileSystemState {
+    readonly files: ReadonlyMap<string, VolumeFileMetadata>;
+}
+/**
  * Opens a volume from a secret
- * Derives keys, creates volume object, and ensures storage directory exists
+ * Derives keys and returns a volume object (no storage concerns)
  *
  * This is a pure function: same secret always produces same volume
  *
  * @param secret - Volume secret
  * @param crypto - Cryptographic operations
- * @param storage - Storage backend
- * @param pathMapper - Function to map public key to volume path
  * @returns Volume object
  */
-export declare function openVolume(secret: Secret, crypto: CryptoOperations, storage: StorageBackend, pathMapper?: ChannelPathMapper): Promise<Volume>;
+export declare function openVolume(secret: Secret, crypto: CryptoOperations): Promise<Volume>;
 /**
  * Loads all events from a volume's event log
  * Events are loaded from storage and returned in deterministic order
@@ -45,7 +66,7 @@ export declare function verifyEventLog(entries: EventLogEntry[], volume: Volume,
  * @param entries - Event log entries (must be sorted and verified)
  * @returns Materialized file system state
  */
-export declare function replayEvents(entries: EventLogEntry[]): FileSystemState;
+export declare function replayEvents(entries: EventLogEntry[]): VolumeFileSystemState;
 /**
  * Materializes a volume's file system state
  * Loads event log, verifies signatures, and replays events
@@ -57,7 +78,7 @@ export declare function replayEvents(entries: EventLogEntry[]): FileSystemState;
  * @param crypto - Cryptographic operations
  * @returns Materialized file system state
  */
-export declare function materializeVolume(volume: Volume, channelStorage: Log, crypto: CryptoOperations): Promise<FileSystemState>;
+export declare function materializeVolume(volume: Volume, channelStorage: Log, crypto: CryptoOperations): Promise<VolumeFileSystemState>;
 /**
  * Gets a file from a materialized volume
  *
@@ -65,12 +86,12 @@ export declare function materializeVolume(volume: Volume, channelStorage: Log, c
  * @param fileName - Name of the file to get
  * @returns File metadata, or undefined if file doesn't exist
  */
-export declare function getFile(fileSystemState: FileSystemState, fileName: string): FileMetadata | undefined;
+export declare function getFile(fileSystemState: VolumeFileSystemState, fileName: string): VolumeFileMetadata | undefined;
 /**
  * Lists all files in a materialized volume
  *
  * @param fileSystemState - Materialized file system state
  * @returns Array of file metadata, sorted by file name
  */
-export declare function listFiles(fileSystemState: FileSystemState): FileMetadata[];
+export declare function listFiles(fileSystemState: VolumeFileSystemState): VolumeFileMetadata[];
 //# sourceMappingURL=volume.d.ts.map

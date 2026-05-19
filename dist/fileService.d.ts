@@ -1,5 +1,4 @@
 import type { CryptoOperations } from 'nearbytes-crypto';
-import type { StorageBackend, ChannelPathMapper } from 'nearbytes-storage';
 import type { SerializedEvent } from 'nearbytes-crypto';
 import { EventType } from 'nearbytes-crypto';
 import { type Log } from 'nearbytes-log';
@@ -74,8 +73,6 @@ export interface RenameFileSummary {
 export interface FileServiceDependencies {
     log: Log;
     crypto: CryptoOperations;
-    storage: StorageBackend;
-    pathMapper?: ChannelPathMapper;
     now?: () => number;
 }
 export interface FileService {

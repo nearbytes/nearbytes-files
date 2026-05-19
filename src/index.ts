@@ -59,6 +59,7 @@ export {
 export { reconstructFileState } from './fileState.js';
 export { isFileEvent, encodeFileEvent, decodeFileEvent } from './fileEventCodec.js';
 export { dedupeOrderedFilenames, resolveImportedFilename } from './fileCommands.js';
+export type { Volume, VolumeFileMetadata, VolumeFileSystemState } from './volume.js';
 export {
   openVolume,
   loadEventLog,

@@ -1,19 +1,16 @@
 import type { Secret, PublicKey } from 'nearbytes-crypto';
 import type { Hash } from 'nearbytes-crypto';
 import type { CryptoOperations } from 'nearbytes-crypto';
-import type { StorageBackend, ChannelPathMapper } from 'nearbytes-storage';
 import { type Log } from 'nearbytes-log';
 /**
  * Sets up a new channel from a secret
+ * Derives keys and returns the public key (no storage concerns)
  * @param secret - Channel secret (e.g., "channelname:password")
  * @param crypto - Cryptographic operations
- * @param storage - Storage backend
- * @param pathMapper - Function to map public key to channel path
- * @returns Public key and channel path
+ * @returns Public key
  */
-export declare function setupChannel(secret: Secret, crypto: CryptoOperations, storage: StorageBackend, pathMapper?: ChannelPathMapper): Promise<{
+export declare function setupChannel(secret: Secret, crypto: CryptoOperations): Promise<{
     publicKey: PublicKey;
-    channelPath: string;
 }>;
 /**
  * Stores data in a channel

@@ -6,8 +6,6 @@ import { base64UrlToBytes, bytesToBase64Url, bytesToHex, hexToBytes } from 'near
 import {
   canonicalJsonBytes,
   canonicalJsonString,
-  type SourceFileReference,
-  parseSourceFileReferenceValue,
 } from './fileReferenceCodec.js';
 
 export interface IdentityProfile {
@@ -35,20 +33,11 @@ export interface IdentitySnapshot {
   readonly sig: string;
 }
 
-export interface ChatAttachment {
-  readonly kind: 'nb.src.ref.v1';
-  readonly name: string;
-  readonly mime?: string;
-  readonly createdAt?: number;
-  readonly ref: SourceFileReference;
-}
-
 export interface ChatMessage {
   readonly p: 'nb.chat.message.v1';
   readonly k: string;
   readonly ts: number;
-  readonly body?: string;
-  readonly attachment?: ChatAttachment;
+  readonly body: string;
   readonly sig: string;
 }
 
@@ -91,12 +80,11 @@ export async function createChatMessage(
   crypto: CryptoOperations,
   keyPair: KeyPair,
   input: {
-    body?: string;
-    attachment?: ChatAttachment;
+    body: string;
     timestamp: number;
   }
 ): Promise<ChatMessage> {
-  const unsigned = canonicalChatMessage(keyPair.publicKey, input.body, input.attachment, input.timestamp);
+  const unsigned = canonicalChatMessage(keyPair.publicKey, input.body, input.timestamp);
   const signature = await crypto.signPR(canonicalJsonBytes(unsigned as unknown as JsonValue), keyPair.privateKey);
   return {
     ...unsigned,
@@ -109,7 +97,7 @@ export async function verifyChatMessage(
   message: ChatMessage
 ): Promise<boolean> {
   const publicKey = publicKeyFromHex(message.k);
-  const unsigned = canonicalChatMessage(publicKey, message.body, message.attachment, message.ts);
+  const unsigned = canonicalChatMessage(publicKey, message.body, message.ts);
   return crypto.verifyPU(
     canonicalJsonBytes(unsigned as unknown as JsonValue),
     createSignature(base64UrlToBytes(message.sig)),
@@ -232,18 +220,13 @@ export function parseChatMessage(value: unknown): ChatMessage {
   }
   const publicKey = parsePublicKeyHex(object.k, 'Chat message public key is invalid');
   const ts = parseTimestamp(object.ts, 'Chat message timestamp is invalid');
-  const body = parseOptionalTrimmedString(object.body, 'Chat message body is invalid');
-  const attachment = object.attachment === undefined ? undefined : parseChatAttachment(object.attachment);
-  if (!body && !attachment) {
-    throw new Error('Chat message must contain text or an attachment');
-  }
+  const body = parseRequiredTrimmedString(object.body, 'Chat message body is required');
   const sig = parseBase64UrlString(object.sig, 'Chat message signature is invalid');
   return {
     p: 'nb.chat.message.v1',
     k: publicKey,
     ts,
     body,
-    attachment,
     sig,
   };
 }
@@ -254,10 +237,6 @@ export function parseChatMessageJson(text: string): ChatMessage | null {
     return null;
   }
   return parseChatMessage(parsed);
-}
-
-export function parseChatAttachmentValue(value: unknown): ChatAttachment {
-  return parseChatAttachment(value);
 }
 
 function canonicalIdentityRecord(
@@ -305,21 +284,18 @@ function canonicalIdentitySnapshot(
 
 function canonicalChatMessage(
   publicKey: PublicKey,
-  body: string | undefined,
-  attachment: ChatAttachment | undefined,
+  body: string,
   timestamp: number
 ): Omit<ChatMessage, 'sig'> {
-  const normalizedBody = normalizeOptionalString(body);
-  const normalizedAttachment = attachment ? normalizeAttachment(attachment) : undefined;
-  if (!normalizedBody && !normalizedAttachment) {
-    throw new Error('Chat message must contain text or an attachment');
+  const normalizedBody = body.trim();
+  if (!normalizedBody) {
+    throw new Error('Chat message body must not be empty');
   }
   return {
     p: 'nb.chat.message.v1',
     k: bytesToHex(publicKey),
     ts: timestamp,
     body: normalizedBody,
-    attachment: normalizedAttachment,
   };
 }
 
@@ -332,48 +308,11 @@ function normalizeIdentityProfile(profile: IdentityProfile): IdentityProfile {
   return bio ? { displayName, bio } : { displayName };
 }
 
-function normalizeAttachment(attachment: ChatAttachment): ChatAttachment {
-  const name = attachment.name.trim();
-  if (name.length === 0) {
-    throw new Error('Attachment name is required');
-  }
-  const mime = normalizeOptionalString(attachment.mime);
-  const createdAt = attachment.createdAt;
-  if (createdAt !== undefined && (!Number.isSafeInteger(createdAt) || createdAt < 0)) {
-    throw new Error('Attachment createdAt must be a non-negative integer');
-  }
-  return {
-    kind: 'nb.src.ref.v1',
-    name,
-    mime,
-    createdAt,
-    ref: parseSourceFileReferenceValue(attachment.ref),
-  };
-}
-
 function parseIdentityProfile(value: unknown): IdentityProfile {
   const object = asObject(value, 'Identity profile must be an object');
   return normalizeIdentityProfile({
     displayName: parseRequiredString(object.displayName, 'Identity display name is invalid'),
     bio: parseOptionalTrimmedString(object.bio, 'Identity bio is invalid'),
-  });
-}
-
-function parseChatAttachment(value: unknown): ChatAttachment {
-  const object = asObject(value, 'Chat attachment must be an object');
-  if (object.kind !== 'nb.src.ref.v1') {
-    throw new Error('Unsupported chat attachment kind');
-  }
-  const createdAt =
-    object.createdAt === undefined
-      ? undefined
-      : parseTimestamp(object.createdAt, 'Chat attachment createdAt is invalid');
-  return normalizeAttachment({
-    kind: 'nb.src.ref.v1',
-    name: parseRequiredString(object.name, 'Chat attachment name is invalid'),
-    mime: parseOptionalTrimmedString(object.mime, 'Chat attachment mime is invalid'),
-    createdAt,
-    ref: parseSourceFileReferenceValue(object.ref),
   });
 }
 
@@ -425,6 +364,15 @@ function parseRequiredString(value: unknown, message: string): string {
     throw new Error(message);
   }
   return value;
+}
+
+function parseRequiredTrimmedString(value: unknown, message: string): string {
+  const s = parseRequiredString(value, message);
+  const trimmed = s.trim();
+  if (!trimmed) {
+    throw new Error(message);
+  }
+  return trimmed;
 }
 
 function parseOptionalTrimmedString(value: unknown, message: string): string | undefined {

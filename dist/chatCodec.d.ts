@@ -1,6 +1,5 @@
 import type { CryptoOperations } from 'nearbytes-crypto';
 import type { KeyPair, PublicKey } from 'nearbytes-crypto';
-import { type SourceFileReference } from './fileReferenceCodec.js';
 export interface IdentityProfile {
     readonly displayName: string;
     readonly bio?: string;
@@ -23,26 +22,17 @@ export interface IdentitySnapshot {
     readonly record: IdentityRecord;
     readonly sig: string;
 }
-export interface ChatAttachment {
-    readonly kind: 'nb.src.ref.v1';
-    readonly name: string;
-    readonly mime?: string;
-    readonly createdAt?: number;
-    readonly ref: SourceFileReference;
-}
 export interface ChatMessage {
     readonly p: 'nb.chat.message.v1';
     readonly k: string;
     readonly ts: number;
-    readonly body?: string;
-    readonly attachment?: ChatAttachment;
+    readonly body: string;
     readonly sig: string;
 }
 export declare function createIdentityRecord(crypto: CryptoOperations, keyPair: KeyPair, profile: IdentityProfile, timestamp: number): Promise<IdentityRecord>;
 export declare function verifyIdentityRecord(crypto: CryptoOperations, record: IdentityRecord): Promise<boolean>;
 export declare function createChatMessage(crypto: CryptoOperations, keyPair: KeyPair, input: {
-    body?: string;
-    attachment?: ChatAttachment;
+    body: string;
     timestamp: number;
 }): Promise<ChatMessage>;
 export declare function verifyChatMessage(crypto: CryptoOperations, message: ChatMessage): Promise<boolean>;
@@ -64,6 +54,5 @@ export declare function parseIdentitySnapshot(value: unknown): IdentitySnapshot;
 export declare function parseIdentitySnapshotJson(text: string): IdentitySnapshot | null;
 export declare function parseChatMessage(value: unknown): ChatMessage;
 export declare function parseChatMessageJson(text: string): ChatMessage | null;
-export declare function parseChatAttachmentValue(value: unknown): ChatAttachment;
 export declare function publicKeyFromHex(value: string): PublicKey;
 //# sourceMappingURL=chatCodec.d.ts.map

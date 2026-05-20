@@ -27,7 +27,6 @@ export type {
   IdentitySnapshot,
   ChatMessage,
   IdentityProfile,
-  ChatAttachment,
 } from './chatCodec.js';
 export type { EncryptedFileWrite, RecipientKeyCapsuleBytes } from './fileCrypto.js';
 
@@ -93,5 +92,4 @@ export {
   serializeChatMessage,
   serializeIdentitySnapshot,
   publicKeyFromHex,
-  parseChatAttachmentValue,
 } from './chatCodec.js';

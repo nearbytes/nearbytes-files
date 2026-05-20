@@ -7,5 +7,5 @@ export { isFileEvent, encodeFileEvent, decodeFileEvent } from './fileEventCodec.
 export { dedupeOrderedFilenames, resolveImportedFilename } from './fileCommands.js';
 export { openVolume, loadEventLog, verifyEventLog, replayEvents, materializeVolume, getFile, listFiles, } from './volume.js';
 export { storeData, retrieveData, storeDataDeduplicated, deleteFile, setupChannel, } from './operations.js';
-export { createIdentityRecord, verifyIdentityRecord, createChatMessage, verifyChatMessage, createIdentitySnapshot, verifyIdentitySnapshot, parseChatMessageJson, parseIdentityRecordJson, parseIdentitySnapshotJson, parseChatMessage, parseIdentityRecord, parseIdentitySnapshot, serializeIdentityRecord, serializeChatMessage, serializeIdentitySnapshot, publicKeyFromHex, parseChatAttachmentValue, } from './chatCodec.js';
+export { createIdentityRecord, verifyIdentityRecord, createChatMessage, verifyChatMessage, createIdentitySnapshot, verifyIdentitySnapshot, parseChatMessageJson, parseIdentityRecordJson, parseIdentitySnapshotJson, parseChatMessage, parseIdentityRecord, parseIdentitySnapshot, serializeIdentityRecord, serializeChatMessage, serializeIdentitySnapshot, publicKeyFromHex, } from './chatCodec.js';
 //# sourceMappingURL=index.js.map

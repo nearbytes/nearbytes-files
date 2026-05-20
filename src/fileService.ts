@@ -89,7 +89,6 @@ export interface TimelineEvent {
   authorPublicKey?: string;
   displayName?: string;
   body?: string;
-  attachmentName?: string;
   summary?: string;
   record?: IdentityRecord;
   message?: ChatMessage;
@@ -186,7 +185,6 @@ interface StoredTimelineRow {
   authorPublicKey?: string;
   displayName?: string;
   body?: string;
-  attachmentName?: string;
   summary?: string;
   record?: IdentityRecord;
   message?: ChatMessage;
@@ -916,7 +914,6 @@ function mapEntriesToTimeline(entries: EventLogEntry[]): TimelineEvent[] {
     authorPublicKey: row.authorPublicKey,
     displayName: row.displayName,
     body: row.body,
-    attachmentName: row.attachmentName,
     summary: row.summary,
     record: row.record,
     message: row.message,
@@ -1053,7 +1050,6 @@ function buildTimelineRows(entries: EventLogEntry[]): StoredTimelineRow[] {
       const inferredTimestamp = payload.publishedAt ?? sequence;
       const chatMessage = payload.message ? parseChatMessageJson(payload.message) : null;
       const body = timelineSnippet(chatMessage?.body);
-      const attachmentName = chatMessage?.attachment?.name;
       rows.push({
         eventHash: entry.eventHash,
         type: EventType.CHAT_MESSAGE,
@@ -1064,8 +1060,7 @@ function buildTimelineRows(entries: EventLogEntry[]): StoredTimelineRow[] {
         publishedAt: inferredTimestamp,
         authorPublicKey: payload.authorPublicKey,
         body,
-        attachmentName,
-        summary: body ?? attachmentName ?? 'Attachment message',
+        summary: body ?? 'Chat message',
         message: chatMessage ?? undefined,
       });
       continue;
@@ -1124,7 +1119,6 @@ function buildTimelineRows(entries: EventLogEntry[]): StoredTimelineRow[] {
       if (payload.protocol === 'nb.chat.message.v1') {
         const chatMessage = parseChatMessageJson(payload.record);
         const body = timelineSnippet(chatMessage?.body);
-        const attachmentName = chatMessage?.attachment?.name;
         rows.push({
           eventHash: entry.eventHash,
           type: EventType.APP_RECORD,
@@ -1136,8 +1130,7 @@ function buildTimelineRows(entries: EventLogEntry[]): StoredTimelineRow[] {
           publishedAt: inferredTimestamp,
           authorPublicKey: payload.authorPublicKey,
           body,
-          attachmentName,
-          summary: body ?? attachmentName ?? 'Attachment message',
+          summary: body ?? 'Chat message',
           message: chatMessage ?? undefined,
         });
         continue;
@@ -1339,7 +1332,7 @@ function compareTimelineRows(
           ? 'D'
           : left.type === EventType.DECLARE_IDENTITY
             ? `I:${left.displayName ?? left.authorPublicKey ?? ''}`
-            : `M:${left.body ?? left.attachmentName ?? left.authorPublicKey ?? ''}`;
+            : `M:${left.body ?? left.authorPublicKey ?? ''}`;
   const rightTie =
     right.type === 'CREATE_FILE'
       ? `C:${right.blobHash ?? ''}`
@@ -1349,7 +1342,7 @@ function compareTimelineRows(
           ? 'D'
           : right.type === EventType.DECLARE_IDENTITY
             ? `I:${right.displayName ?? right.authorPublicKey ?? ''}`
-            : `M:${right.body ?? right.attachmentName ?? right.authorPublicKey ?? ''}`;
+            : `M:${right.body ?? right.authorPublicKey ?? ''}`;
   if (leftTie < rightTie) return -1;
   if (leftTie > rightTie) return 1;
 

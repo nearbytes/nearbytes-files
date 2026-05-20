@@ -50,7 +50,6 @@ export interface TimelineEvent {
     authorPublicKey?: string;
     displayName?: string;
     body?: string;
-    attachmentName?: string;
     summary?: string;
     record?: IdentityRecord;
     message?: ChatMessage;

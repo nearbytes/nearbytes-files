@@ -1,7 +1,7 @@
 {
   "name": "nearbytes-files",
   "version": "0.1.0",
-  "description": "Nearbytes file protocol — encrypted file storage on top of the event log",
+  "description": "Nearbytes file protocol \u2014 encrypted file storage on top of the event log",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,7 +16,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "prepare": "tsc"
   },
   "license": "MIT",
   "engines": {

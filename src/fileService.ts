@@ -1,8 +1,8 @@
 import type { KeyPair, Secret } from 'nearbytes-crypto';
 import { createSecret } from 'nearbytes-crypto';
 import type { CryptoOperations } from 'nearbytes-crypto';
-import type { EventPayload, Hash, EncryptedData, SerializedEvent } from 'nearbytes-crypto';
-import { createEncryptedData, EMPTY_HASH, EventType, createHash } from 'nearbytes-crypto';
+import type { EventPayload, Hash, EncryptedData, SerializedEvent, CreateFilePayload, RenameFilePayload } from 'nearbytes-crypto';
+import { EventType, createHash } from 'nearbytes-crypto';
 import { DecryptionError } from 'nearbytes-crypto';
 import { type Log } from 'nearbytes-log';
 import { serializeEvent, serializeEventEnvelope, serializeInnerEventPayloadJson } from 'nearbytes-log';
@@ -333,7 +333,6 @@ async function addFileWithDeps(
     blobHash: encrypted.blobHash,
     encryptedKey: encrypted.encryptedKey,
     contentType: encrypted.contentType,
-    size: data.length,
     mimeType,
     createdAt,
   });
@@ -858,7 +857,6 @@ async function importRecipientReferencesWithDeps(
       blobHash: descriptor.h,
       encryptedKey,
       contentType: descriptor.t,
-      size: descriptor.z,
       mimeType: item.mime,
       createdAt,
     });
@@ -928,7 +926,6 @@ function materializeStoredFilesFromEntries(entries: EventLogEntry[]): StoredFile
       if (
         row.blobHash === undefined ||
         row.encryptedKey === undefined ||
-        row.size === undefined ||
         row.createdAt === undefined
       ) {
         continue;
@@ -938,7 +935,7 @@ function materializeStoredFilesFromEntries(entries: EventLogEntry[]): StoredFile
         blobHash: row.blobHash,
         encryptedKey: row.encryptedKey,
         contentType: row.contentType ?? 'b',
-        size: row.size,
+        size: row.size ?? 0,
         mimeType: row.mimeType,
         createdAt: row.createdAt,
       });
@@ -979,19 +976,26 @@ function buildTimelineRows(entries: EventLogEntry[]): StoredTimelineRow[] {
     const payload = entry.signedEvent.payload;
 
     if (payload.type === EventType.CREATE_FILE) {
-      const inferredTimestamp = payload.createdAt ?? sequence;
+      const p = payload as CreateFilePayload;
+      const inferredTimestamp = p.createdAt ?? sequence;
+      const blobHash =
+        p.content.protocol === 'nb.content.single.v1'
+          ? p.content.blockHash
+          : p.content.manifestHash;
+      const contentType: 'b' | 'm' =
+        p.content.protocol === 'nb.content.manifest.v1' ? 'm' : 'b';
       rows.push({
         eventHash: entry.eventHash,
         type: EventType.CREATE_FILE,
-        filename: payload.fileName,
+        filename: p.filename,
         timestamp: inferredTimestamp,
-        hasExplicitTimestamp: payload.createdAt !== undefined,
+        hasExplicitTimestamp: true,
         sequence,
-        blobHash: payload.hash,
-        encryptedKey: payload.encryptedKey,
-        contentType: payload.contentType ?? 'b',
-        size: payload.size ?? 0,
-        mimeType: payload.mimeType,
+        blobHash,
+        encryptedKey: p.wrappedKey,
+        contentType,
+        size: 0,
+        mimeType: p.mimeType,
         createdAt: inferredTimestamp,
       });
       continue;
@@ -1002,9 +1006,9 @@ function buildTimelineRows(entries: EventLogEntry[]): StoredTimelineRow[] {
       rows.push({
         eventHash: entry.eventHash,
         type: EventType.DELETE_FILE,
-        filename: payload.fileName,
+        filename: payload.filename,
         timestamp: inferredTimestamp,
-        hasExplicitTimestamp: payload.deletedAt !== undefined,
+        hasExplicitTimestamp: true,
         sequence,
         deletedAt: inferredTimestamp,
       });
@@ -1012,15 +1016,16 @@ function buildTimelineRows(entries: EventLogEntry[]): StoredTimelineRow[] {
     }
 
     if (payload.type === EventType.RENAME_FILE) {
-      const inferredTimestamp = payload.renamedAt ?? sequence;
+      const p = payload as RenameFilePayload;
+      const inferredTimestamp = p.renamedAt ?? sequence;
       rows.push({
         eventHash: entry.eventHash,
         type: EventType.RENAME_FILE,
-        filename: payload.fileName,
+        filename: p.filename,
         timestamp: inferredTimestamp,
-        hasExplicitTimestamp: payload.renamedAt !== undefined,
+        hasExplicitTimestamp: true,
         sequence,
-        toFilename: payload.toFileName,
+        toFilename: p.toFilename,
         renamedAt: inferredTimestamp,
       });
       continue;
@@ -1204,7 +1209,6 @@ async function upgradeLegacyFilesForExport(
       blobHash: encrypted.blobHash,
       encryptedKey: encrypted.encryptedKey,
       contentType: encrypted.contentType,
-      size: file.size,
       mimeType: file.mimeType,
       createdAt: timestamp,
     });
@@ -1248,7 +1252,6 @@ async function importSourceBundleItems(
       blobHash: item.ref.c.h,
       encryptedKey,
       contentType: item.ref.c.t,
-      size: item.ref.c.z,
       mimeType: item.mime,
       createdAt,
     });
@@ -1386,20 +1389,21 @@ async function appendCreateEvent(
     blobHash: string;
     encryptedKey: EncryptedData;
     contentType: FileContentType;
-    size: number;
     mimeType?: string;
     createdAt: number;
   }
 ): Promise<void> {
+  const contentDescriptor =
+    input.contentType === 'm'
+      ? ({ protocol: 'nb.content.manifest.v1', manifestHash: input.blobHash as Hash } as const)
+      : ({ protocol: 'nb.content.single.v1', blockHash: input.blobHash as Hash } as const);
   const payload: EventPayload = {
     type: EventType.CREATE_FILE,
-    fileName: input.filename,
-    hash: input.blobHash as Hash,
-    encryptedKey: input.encryptedKey,
-    contentType: input.contentType,
-    size: input.size,
-    mimeType: input.mimeType,
+    filename: input.filename,
+    content: contentDescriptor,
+    wrappedKey: input.encryptedKey,
     createdAt: input.createdAt,
+    mimeType: input.mimeType,
   };
   const event = await createSignedEvent(crypto, keyPair, payload, [input.blobHash as Hash]);
   await channelStorage.events.storeEvent(keyPair.publicKey, event);
@@ -1414,9 +1418,7 @@ async function appendDeleteEvent(
 ): Promise<void> {
   const payload: EventPayload = {
     type: EventType.DELETE_FILE,
-    fileName: filename,
-    hash: EMPTY_HASH,
-    encryptedKey: createEncryptedData(new Uint8Array(0)),
+    filename,
     deletedAt,
   };
   const event = await createSignedEvent(crypto, keyPair, payload, []);
@@ -1433,10 +1435,8 @@ async function appendRenameEvent(
 ): Promise<void> {
   const payload: EventPayload = {
     type: EventType.RENAME_FILE,
-    fileName: fromName,
-    toFileName: toName,
-    hash: EMPTY_HASH,
-    encryptedKey: createEncryptedData(new Uint8Array(0)),
+    filename: fromName,
+    toFilename: toName,
     renamedAt,
   };
   const event = await createSignedEvent(crypto, keyPair, payload, []);

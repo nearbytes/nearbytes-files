@@ -42,12 +42,13 @@ export async function storeData(data, fileName, secret, crypto, channelStorage) 
     const keyEncryptionKey = await crypto.deriveSymKey(keyPair.privateKey);
     // 7. Encrypt the symmetric key
     const encryptedKey = await crypto.encryptSym(symmetricKey, keyEncryptionKey);
-    // 8. Create event payload
+    // 8. Create event payload (spec: file-events-v0.3)
     const payload = {
         type: EventType.CREATE_FILE,
-        fileName,
-        hash: dataHash,
-        encryptedKey: createEncryptedData(encryptedKey),
+        filename: fileName,
+        content: { protocol: 'nb.content.single.v1', blockHash: dataHash },
+        wrappedKey: createEncryptedData(encryptedKey),
+        createdAt: Date.now(),
     };
     const signedEvent = await createSignedEvent(crypto, keyPair, payload, [dataHash]);
     const eventHash = await channelStorage.events.storeEvent(keyPair.publicKey, signedEvent);
@@ -72,13 +73,20 @@ export async function retrieveData(eventHash, secret, crypto, channelStorage) {
         throw new Error('Event signature verification failed');
     }
     const decryptedEvent = await hydrateSignedEvent(crypto, keyPair.privateKey, signedEvent);
+    if (decryptedEvent.payload.type !== EventType.CREATE_FILE) {
+        throw new Error(`Expected CREATE_FILE event, got ${String(decryptedEvent.payload.type)}`);
+    }
+    const createPayload = decryptedEvent.payload;
     // 4. Derive symmetric key for decrypting the data encryption key
     const keyEncryptionKey = await crypto.deriveSymKey(keyPair.privateKey);
     // 5. Decrypt the symmetric key
-    const symmetricKeyBytes = await crypto.decryptSym(decryptedEvent.payload.encryptedKey, keyEncryptionKey);
+    const symmetricKeyBytes = await crypto.decryptSym(createPayload.wrappedKey, keyEncryptionKey);
     const symmetricKey = createSymmetricKey(symmetricKeyBytes);
-    // 6. Retrieve encrypted data
-    const encryptedData = await channelStorage.blocks.retrieve(decryptedEvent.payload.hash, keyPair.publicKey);
+    // 6. Retrieve encrypted data using the block hash from the content descriptor
+    if (createPayload.content.protocol !== 'nb.content.single.v1') {
+        throw new Error(`Unsupported content protocol: ${createPayload.content.protocol}`);
+    }
+    const encryptedData = await channelStorage.blocks.retrieve(createPayload.content.blockHash, keyPair.publicKey);
     // 7. Decrypt data
     const plaintext = await crypto.decryptSym(encryptedData, symmetricKey);
     return plaintext;
@@ -110,12 +118,13 @@ export async function storeDataDeduplicated(data, fileName, secret, crypto, chan
     const keyEncryptionKey = await crypto.deriveSymKey(keyPair.privateKey);
     // 8. Encrypt the symmetric key
     const encryptedKey = await crypto.encryptSym(symmetricKey, keyEncryptionKey);
-    // 9. Create event payload
+    // 9. Create event payload (spec: file-events-v0.3)
     const payload = {
         type: EventType.CREATE_FILE,
-        fileName,
-        hash: dataHash,
-        encryptedKey: createEncryptedData(encryptedKey),
+        filename: fileName,
+        content: { protocol: 'nb.content.single.v1', blockHash: dataHash },
+        wrappedKey: createEncryptedData(encryptedKey),
+        createdAt: Date.now(),
     };
     const signedEvent = await createSignedEvent(crypto, keyPair, payload, [dataHash]);
     const eventHash = await channelStorage.events.storeEvent(keyPair.publicKey, signedEvent);
@@ -132,15 +141,12 @@ export async function storeDataDeduplicated(data, fileName, secret, crypto, chan
 export async function deleteFile(fileName, secret, crypto, channelStorage) {
     // 1. Derive keys from secret
     const keyPair = await crypto.deriveKeys(secret);
-    // 2. Create empty hash and encrypted key for DELETE_FILE events
-    const emptyHash = await computeHash(new Uint8Array(0));
-    const emptyEncryptedKey = createEncryptedData(new Uint8Array(0));
-    // 3. Create event payload
+    // 2. Create DELETE_FILE event payload (spec: file-events-v0.3)
+    // No block refs needed — deletion carries no data blocks
     const payload = {
         type: EventType.DELETE_FILE,
-        fileName,
-        hash: emptyHash,
-        encryptedKey: emptyEncryptedKey,
+        filename: fileName,
+        deletedAt: Date.now(),
     };
     const signedEvent = await createSignedEvent(crypto, keyPair, payload, []);
     const eventHash = await channelStorage.events.storeEvent(keyPair.publicKey, signedEvent);

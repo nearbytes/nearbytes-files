@@ -90,28 +90,31 @@ export function replayEvents(entries) {
     const files = new Map();
     for (const entry of entries) {
         const { signedEvent } = entry;
-        const { type, fileName, hash } = signedEvent.payload;
-        if (type === EventType.CREATE_FILE) {
-            // Add or update file
-            files.set(fileName, {
-                name: fileName,
-                contentAddress: hash,
+        const { payload } = signedEvent;
+        if (payload.type === EventType.CREATE_FILE) {
+            // Resolve the content address from the content descriptor
+            const contentAddress = payload.content.protocol === 'nb.content.single.v1'
+                ? payload.content.blockHash
+                : payload.content.manifestHash;
+            files.set(payload.filename, {
+                name: payload.filename,
+                contentAddress,
                 eventHash: entry.eventHash,
             });
         }
-        else if (type === EventType.DELETE_FILE) {
+        else if (payload.type === EventType.DELETE_FILE) {
             // Remove file (idempotent: no-op if file doesn't exist)
-            files.delete(fileName);
+            files.delete(payload.filename);
         }
-        else if (type === EventType.RENAME_FILE) {
-            const existing = files.get(fileName);
+        else if (payload.type === EventType.RENAME_FILE) {
+            const existing = files.get(payload.filename);
             if (!existing) {
                 continue;
             }
-            files.delete(fileName);
-            files.set(signedEvent.payload.toFileName ?? fileName, {
+            files.delete(payload.filename);
+            files.set(payload.toFilename, {
                 ...existing,
-                name: signedEvent.payload.toFileName ?? fileName,
+                name: payload.toFilename,
                 eventHash: entry.eventHash,
             });
         }

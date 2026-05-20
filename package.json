@@ -8,9 +8,6 @@
   "files": [
     "dist"
   ],
-  "bin": {
-    "nbf": "dist/cli/index.js"
-  },
   "exports": {
     ".": {
       "import": "./dist/index.js",
@@ -26,7 +23,6 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "commander": "^12.0.0",
     "nearbytes-crypto": "nearbytes/nearbytes-crypto#main",
     "nearbytes-log": "nearbytes/nearbytes-log#main",
     "nearbytes-storage": "nearbytes/nearbytes-storage#main"

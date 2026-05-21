@@ -28,6 +28,8 @@ export declare function cmdFileAdd(ctx: Context, filePath: string, secret: strin
 export declare function cmdFileList(ctx: Context, secret: string): Promise<void>;
 export declare function cmdFileGet(ctx: Context, filename: string, secret: string, outputPath: string): Promise<void>;
 export declare function cmdFileRemove(ctx: Context, filename: string, secret: string): Promise<void>;
+/** Show the volume event timeline (audit log of creates, deletes, renames, …). */
+export declare function cmdTimeline(ctx: Context, secret: string): Promise<void>;
 export declare function cmdRefresh(ctx: Context): Promise<void>;
 export declare function cmdVolumes(ctx: Context): Promise<void>;
 export declare function cmdHelp(): void;

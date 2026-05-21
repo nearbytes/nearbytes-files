@@ -1,0 +1,27 @@
+/** Chat/identity codec exports without reactive volume or skeleton. */
+
+export type {
+  IdentityRecord,
+  IdentitySnapshot,
+  ChatMessage,
+  IdentityProfile,
+} from './chatCodec.js';
+
+export {
+  createIdentityRecord,
+  verifyIdentityRecord,
+  createChatMessage,
+  verifyChatMessage,
+  createIdentitySnapshot,
+  verifyIdentitySnapshot,
+  parseChatMessageJson,
+  parseIdentityRecordJson,
+  parseIdentitySnapshotJson,
+  parseChatMessage,
+  parseIdentityRecord,
+  parseIdentitySnapshot,
+  serializeIdentityRecord,
+  serializeChatMessage,
+  serializeIdentitySnapshot,
+  publicKeyFromHex,
+} from './chatCodec.js';

@@ -15,7 +15,7 @@
 import { Command } from 'commander';
 import { readConfig, defaultDataDir } from 'nearbytes-skeleton';
 import { createContext } from './context.js';
-import { cmdSetup, cmdVolumeOpen, cmdFileAdd, cmdFileList, cmdFileGet, cmdFileRemove, red, } from './commands.js';
+import { cmdSetup, cmdVolumeOpen, cmdFileAdd, cmdFileList, cmdFileGet, cmdFileRemove, cmdTimeline, red, } from './commands.js';
 import { startRepl } from './repl.js';
 // ---------------------------------------------------------------------------
 // Helpers
@@ -87,6 +87,17 @@ volumeCmd
     .description('List all open volumes')
     .action(async () => {
     die('`volume list` is only meaningful in REPL mode — try `nbf repl`');
+});
+// ── timeline ──────────────────────────────────────────────────────────────
+program
+    .command('timeline')
+    .description('Show volume event timeline (chronological audit log)')
+    .requiredOption('-s, --secret <secret>', 'Volume secret')
+    .action(async (opts) => {
+    const gopts = program.opts();
+    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(() => cmdTimeline(ctx, opts.secret));
 });
 // ── file ──────────────────────────────────────────────────────────────────
 const fileCmd = program.command('file').description('File operations');

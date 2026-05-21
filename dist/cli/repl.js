@@ -17,7 +17,10 @@
  */
 import * as readline from 'readline';
 import { cyan, dim, red, bold } from './output.js';
-import { cmdSetup, cmdVolumeOpen, cmdVolumeInfo, cmdUse, cmdVolumes, cmdFileAdd, cmdFileList, cmdFileGet, cmdFileRemove, cmdRefresh, cmdHelp, } from './commands.js';
+import { cmdSetup, cmdVolumeOpen, cmdVolumeInfo, cmdUse, cmdVolumes, cmdFileAdd, cmdFileList, cmdFileGet, cmdFileRemove, cmdRefresh, cmdTimeline, cmdHelp, } from './commands.js';
+import { createReplCompleter } from './replCompleter.js';
+import { loadReplHistory, createReplHistorySession, attachReverseSearch, REPL_HISTORY_MAX_ENTRIES, } from './replHistory.js';
+import { installReplInterruptHandlers } from './replTerminal.js';
 // ---------------------------------------------------------------------------
 // Tokeniser
 // ---------------------------------------------------------------------------
@@ -54,6 +57,12 @@ function tokenise(line) {
         tokens.push(current);
     return tokens;
 }
+class ExitReplSignal extends Error {
+    constructor() {
+        super(...arguments);
+        this.name = 'ExitReplSignal';
+    }
+}
 // ---------------------------------------------------------------------------
 // Dispatcher
 // ---------------------------------------------------------------------------
@@ -68,8 +77,7 @@ async function dispatch(ctx, tokens) {
             break;
         case 'exit':
         case 'quit':
-            ctx.destroy();
-            process.exit(0);
+            throw new ExitReplSignal();
             break;
         // ---- setup ----
         case 'setup': {
@@ -112,6 +120,11 @@ async function dispatch(ctx, tokens) {
         case 'refresh':
             await cmdRefresh(ctx);
             break;
+        case 'timeline': {
+            const secret = resolveSecret(ctx, rest);
+            await cmdTimeline(ctx, secret);
+            break;
+        }
         // ---- file ----
         case 'file': {
             const [subverb, ...subargs] = rest;
@@ -176,20 +189,24 @@ function resolveSecret(ctx, tokens) {
 // REPL loop
 // ---------------------------------------------------------------------------
 export async function startRepl(ctx) {
+    const initialHistory = await loadReplHistory();
+    const historySession = createReplHistorySession(initialHistory);
     const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout,
+        terminal: true,
         prompt: cyan('nbf') + dim(' › '),
-        completer: (line) => {
-            const completions = [
-                'setup', 'volume open', 'volumes', 'use', 'info', 'refresh',
-                'file add', 'file list', 'file get', 'file rm', 'help', 'exit',
-            ];
-            const hits = completions.filter((c) => c.startsWith(line));
-            return [hits.length > 0 ? hits : completions, line];
-        },
+        completer: createReplCompleter(ctx),
+        history: historySession.lines,
+        historySize: REPL_HISTORY_MAX_ENTRIES,
+        removeHistoryDuplicates: true,
     });
-    console.log(bold('Nearbytes REPL') + dim(' — type "help" for commands, ^D to exit'));
+    historySession.attach(rl);
+    const { cancelSearch } = attachReverseSearch(rl, historySession);
+    installReplInterruptHandlers(rl, { cancelSearch });
+    console.log(bold('Nearbytes REPL') +
+        dim(' — Tab complete, ↑↓ history, ^R search, ^C cancel line, ^D exit'));
+    console.log(dim(`  History: ${historySession.lines.length} entries (saved on exit)`));
     console.log('');
     // If the user pre-configured volumes in config, open them now.
     for (const vc of ctx.config.volumes) {
@@ -207,6 +224,7 @@ export async function startRepl(ctx) {
     }
     rl.prompt();
     rl.on('line', (line) => {
+        historySession.remember(line);
         const tokens = tokenise(line);
         if (tokens.length === 0) {
             rl.prompt();
@@ -215,16 +233,23 @@ export async function startRepl(ctx) {
         dispatch(ctx, tokens)
             .then(() => rl.prompt())
             .catch((err) => {
+            if (err instanceof ExitReplSignal) {
+                ctx.destroy();
+                rl.close();
+                return;
+            }
             const msg = err instanceof Error ? err.message : String(err);
             console.error(red(`✗ ${msg}`));
             rl.prompt();
         });
     });
     rl.on('close', () => {
-        console.log('');
-        console.log(dim('Goodbye.'));
-        ctx.destroy();
-        process.exit(0);
+        void historySession.flush().finally(() => {
+            console.log('');
+            console.log(dim('Goodbye.'));
+            ctx.destroy();
+            process.exit(0);
+        });
     });
 }
 //# sourceMappingURL=repl.js.map

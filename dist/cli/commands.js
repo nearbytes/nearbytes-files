@@ -14,8 +14,9 @@
  */
 import { readFile, writeFile } from 'fs/promises';
 import { basename } from 'path';
+import { expandUserPath } from './paths.js';
 import { createSecret, bytesToHex } from 'nearbytes-crypto';
-import { green, yellow, red, cyan, dim, bold, formatFileTable } from './output.js';
+import { green, yellow, red, cyan, dim, bold, formatFileTable, formatTimelineTable } from './output.js';
 import { openAndWatch, refreshIfOpen } from './context.js';
 // ---------------------------------------------------------------------------
 // setup
@@ -76,10 +77,11 @@ export async function cmdUse(ctx, keyPrefixOrSecret) {
 // file add
 // ---------------------------------------------------------------------------
 export async function cmdFileAdd(ctx, filePath, secret, name) {
-    const filename = name ?? basename(filePath);
+    const resolvedPath = expandUserPath(filePath);
+    const filename = name ?? basename(resolvedPath);
     if (!filename || filename.trim().length === 0)
         throw new Error('File name cannot be empty');
-    const data = Buffer.from(await readFile(filePath));
+    const data = Buffer.from(await readFile(resolvedPath));
     const meta = await ctx.fileService.addFile(secret, filename, data);
     console.log(green('✓ File added'));
     console.log(`  Name : ${meta.filename}`);
@@ -108,11 +110,12 @@ export async function cmdFileGet(ctx, filename, secret, outputPath) {
     const meta = files.find((f) => f.filename === filename);
     if (!meta)
         throw new Error(`File "${filename}" not found in volume`);
+    const resolvedOutput = expandUserPath(outputPath);
     const data = await ctx.fileService.getFile(secret, meta.blobHash);
-    await writeFile(outputPath, data);
+    await writeFile(resolvedOutput, data);
     console.log(green('✓ File retrieved'));
     console.log(`  Name   : ${filename}`);
-    console.log(`  Output : ${outputPath}`);
+    console.log(`  Output : ${resolvedOutput}`);
     console.log(`  Size   : ${data.length} bytes`);
 }
 // ---------------------------------------------------------------------------
@@ -122,6 +125,24 @@ export async function cmdFileRemove(ctx, filename, secret) {
     await ctx.fileService.deleteFile(secret, filename);
     console.log(green('✓ File removed'));
     console.log(`  Name: ${filename}`);
+    await refreshIfOpen(ctx, secret);
+}
+// ---------------------------------------------------------------------------
+// timeline
+// ---------------------------------------------------------------------------
+/** Show the volume event timeline (audit log of creates, deletes, renames, …). */
+export async function cmdTimeline(ctx, secret) {
+    const events = await ctx.fileService.getTimeline(secret);
+    if (events.length === 0) {
+        console.log(yellow('  (no events in this volume yet)'));
+        return;
+    }
+    console.log(green(`✓ Timeline — ${events.length} event(s)`));
+    console.log('');
+    console.log(formatTimelineTable(events));
+    console.log('');
+    console.log(dim('Replay order is a total order (timestamp → log position → filename → event hash).'));
+    console.log(dim('Raw events on disk are sorted by event hash; the timeline above is the causal replay order.'));
     await refreshIfOpen(ctx, secret);
 }
 // ---------------------------------------------------------------------------
@@ -162,6 +183,7 @@ ${cyan('Volume commands')}
   volumes                         List all open volumes in this session
   use <key-prefix|secret>         Set active volume
   info                            Show active volume info
+  timeline [-s <secret>]          Chronological audit log of volume events
   refresh                         Reload active volume state
 
 ${cyan('File commands')}
@@ -173,6 +195,9 @@ ${cyan('File commands')}
 ${cyan('REPL meta')}
   help                            Show this message
   exit / quit / ^D                Exit the REPL
+                                  ^C cancel line · ^R search · ↑↓ command history
+
+${dim('Command history')} is a linear list of past REPL inputs (not the volume timeline).
 `);
 }
 export { red };

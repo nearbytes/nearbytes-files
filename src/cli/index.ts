@@ -23,6 +23,7 @@ import {
   cmdFileList,
   cmdFileGet,
   cmdFileRemove,
+  cmdTimeline,
   red,
 } from './commands.js';
 import { startRepl } from './repl.js';
@@ -110,6 +111,19 @@ volumeCmd
   .description('List all open volumes')
   .action(async () => {
     die('`volume list` is only meaningful in REPL mode — try `nbf repl`');
+  });
+
+// ── timeline ──────────────────────────────────────────────────────────────
+
+program
+  .command('timeline')
+  .description('Show volume event timeline (chronological audit log)')
+  .requiredOption('-s, --secret <secret>', 'Volume secret')
+  .action(async (opts: { secret: string }) => {
+    const gopts = program.opts<{ config?: string; dataDir: string }>();
+    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(() => cmdTimeline(ctx, opts.secret));
   });
 
 // ── file ──────────────────────────────────────────────────────────────────

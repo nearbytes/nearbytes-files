@@ -3,6 +3,7 @@
  * Colour output is suppressed when stdout is not a TTY (pipes, CI, etc.).
  */
 import type { FileMetadata } from '../fileEvents.js';
+import type { TimelineEvent } from '../fileService.js';
 export declare const green: (s: string) => string;
 export declare const yellow: (s: string) => string;
 export declare const red: (s: string) => string;
@@ -15,4 +16,8 @@ export declare const bold: (s: string) => string;
  * Columns: Name · Size · Created · Content hash (first 16 hex chars + ellipsis)
  */
 export declare function formatFileTable(files: readonly FileMetadata[]): string;
+/**
+ * Chronological audit log of volume events (oldest first).
+ */
+export declare function formatTimelineTable(events: readonly TimelineEvent[]): string;
 //# sourceMappingURL=output.d.ts.map

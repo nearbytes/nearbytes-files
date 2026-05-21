@@ -3,7 +3,9 @@
  * Colour output is suppressed when stdout is not a TTY (pipes, CI, etc.).
  */
 
+import { EventType } from 'nearbytes-crypto';
 import type { FileMetadata } from '../fileEvents.js';
+import type { TimelineEvent } from '../fileService.js';
 
 const isTTY = process.stdout.isTTY === true;
 
@@ -68,6 +70,87 @@ export function formatFileTable(files: readonly FileMetadata[]): string {
       fmtSize(f.size).padEnd(COL_SIZE) +
       fmtDate(f.createdAt).padEnd(COL_DATE) +
       f.blobHash.slice(0, 16) + '…'
+    );
+  });
+
+  return [header, sep, ...body].join('\n');
+}
+
+function describeTimelineEvent(event: TimelineEvent): string {
+  switch (event.type) {
+    case EventType.CREATE_FILE:
+      return `+ ${event.filename}`;
+    case EventType.DELETE_FILE:
+      return `- ${event.filename}`;
+    case EventType.RENAME_FILE:
+      return `${event.filename} → ${event.toFilename ?? '?'}`;
+    case EventType.DECLARE_IDENTITY:
+      return event.summary ?? event.displayName ?? 'identity';
+    case EventType.CHAT_MESSAGE:
+      return event.summary ?? event.body ?? 'chat';
+    case EventType.APP_RECORD:
+      return event.summary ?? event.protocol ?? 'record';
+    default:
+      return event.summary ?? String(event.type);
+  }
+}
+
+function formatTimelineType(event: TimelineEvent): string {
+  switch (event.type) {
+    case EventType.CREATE_FILE:
+      return 'create';
+    case EventType.DELETE_FILE:
+      return 'delete';
+    case EventType.RENAME_FILE:
+      return 'rename';
+    case EventType.DECLARE_IDENTITY:
+      return 'identity';
+    case EventType.CHAT_MESSAGE:
+      return 'chat';
+    case EventType.APP_RECORD:
+      return 'record';
+    default:
+      return String(event.type).toLowerCase();
+  }
+}
+
+/**
+ * Chronological audit log of volume events (oldest first).
+ */
+export function formatTimelineTable(events: readonly TimelineEvent[]): string {
+  if (events.length === 0) return yellow('  (no events)');
+
+  const COL_SEQ = 5;
+  const COL_WHEN = 18;
+  const COL_TYPE = 8;
+  const colWhat = Math.min(
+    56,
+    Math.max(
+      12,
+      ...events.map((e) => describeTimelineEvent(e).length),
+    ),
+  );
+
+  const header =
+    bold('#'.padEnd(COL_SEQ)) +
+    bold('When'.padEnd(COL_WHEN)) +
+    bold('Type'.padEnd(COL_TYPE)) +
+    bold('What') +
+    bold('  Event');
+
+  const sep = dim('─'.repeat(COL_SEQ + COL_WHEN + COL_TYPE + colWhat + 20));
+
+  const body = events.map((event, index) => {
+    const what = describeTimelineEvent(event);
+    const whatCol =
+      what.length > colWhat ? `${what.slice(0, colWhat - 1)}…` : what;
+    return (
+      dim(String(index + 1).padStart(3)) +
+      '  ' +
+      fmtDate(event.timestamp).padEnd(COL_WHEN) +
+      formatTimelineType(event).padEnd(COL_TYPE) +
+      whatCol.padEnd(colWhat) +
+      dim(event.eventHash.slice(0, 12) + '…')
     );
   });
 

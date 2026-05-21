@@ -1,3 +1,5 @@
+export { createReactiveVolume } from './reactiveVolume.js';
+export type { ReactiveVolume } from './reactiveVolume.js';
 export type { FileMetadata, FileEvent, CreateFileEvent, DeleteFileEvent, RenameFileEvent } from './fileEvents.js';
 export type { FileService, FileServiceDependencies, TimelineEvent, TimelineDelta, EventDetail, SnapshotSummary, ReferenceExportResult, SourceImportResult, RecipientImportResult, RenameFileSummary, RenameFolderSummary, } from './fileService.js';
 export type { SourceReferenceBundle, RecipientReferenceBundle, FileContentType, ContentDescriptor, RecipientKeyCapsule, SourceFileReference, RecipientFileReference, } from './fileReferenceCodec.js';

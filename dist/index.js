@@ -1,3 +1,5 @@
+// Reactive volume
+export { createReactiveVolume } from './reactiveVolume.js';
 // Functions
 export { createFileService } from './fileService.js';
 export { encryptFileForVolume, decryptFileForVolume, volumeIdFromPublicKey, publicKeyFromVolumeId, wrapFileKeyForVolume, unwrapFileKeyForVolume, createRecipientKeyCapsule, unwrapRecipientKeyCapsule, } from './fileCrypto.js';

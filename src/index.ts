@@ -1,3 +1,7 @@
+// Reactive volume
+export { createReactiveVolume } from './reactiveVolume.js';
+export type { ReactiveVolume } from './reactiveVolume.js';
+
 // Types
 export type { FileMetadata, FileEvent, CreateFileEvent, DeleteFileEvent, RenameFileEvent } from './fileEvents.js';
 export type {

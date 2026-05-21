@@ -3,7 +3,7 @@ import { EventType, createHash } from 'nearbytes-crypto';
 import { DecryptionError } from 'nearbytes-crypto';
 import { serializeEvent, serializeEventEnvelope, serializeInnerEventPayloadJson } from 'nearbytes-log';
 import { createSignedEvent } from 'nearbytes-log';
-import { openVolume, loadEventLog, verifyEventLog } from './volume.js';
+import { openChannel, loadEventLog, verifyEventLog } from 'nearbytes-log';
 import { parseChatMessageJson, parseIdentityRecordJson, parseIdentitySnapshotJson, } from './chatCodec.js';
 import { createRecipientKeyCapsule, decryptFileForVolume, encryptFileForVolume, publicKeyFromVolumeId, unwrapFileKeyForVolume, unwrapRecipientKeyCapsule, volumeIdFromPublicKey, wrapFileKeyForVolume, } from './fileCrypto.js';
 import { decodeWrappedKey, encodeWrappedKey, parseRecipientReferenceBundle, parseSourceReferenceBundle, serializeRecipientReferenceBundle, serializeSourceReferenceBundle, } from './fileReferenceCodec.js';
@@ -38,7 +38,7 @@ async function addFileWithDeps(secret, filename, data, mimeType, crypto, channel
     const normalizedSecret = normalizeSecret(secret);
     const keyPair = await crypto.deriveKeys(normalizedSecret);
     const encrypted = await encryptFileForVolume(crypto, keyPair.privateKey, data);
-    await channelStorage.blocks.store(encrypted.blobHash, encrypted.encryptedData, true, keyPair.publicKey);
+    await channelStorage.blocks.store(encrypted.blobHash, encrypted.encryptedData, true);
     const createdAt = now();
     await appendCreateEvent(channelStorage, crypto, keyPair, {
         filename,
@@ -74,7 +74,7 @@ async function renameFolderWithDeps(secret, fromFolder, toFolder, merge, crypto,
         throw new Error('Source and destination folders are the same');
     }
     const normalizedSecret = normalizeSecret(secret);
-    const volume = await openVolume(normalizedSecret, crypto);
+    const volume = await openChannel(normalizedSecret, crypto);
     const entries = await loadEventLog(volume, channelStorage, crypto);
     await verifyEventLog(entries, volume, crypto);
     const files = materializeFilesFromEntries(entries);
@@ -135,7 +135,7 @@ async function renameFileWithDeps(secret, fromName, toName, crypto, channelStora
         throw new Error('Source and destination file names are the same');
     }
     const normalizedSecret = normalizeSecret(secret);
-    const volume = await openVolume(normalizedSecret, crypto);
+    const volume = await openChannel(normalizedSecret, crypto);
     const entries = await loadEventLog(volume, channelStorage, crypto);
     await verifyEventLog(entries, volume, crypto);
     const files = materializeFilesFromEntries(entries);
@@ -156,14 +156,14 @@ async function renameFileWithDeps(secret, fromName, toName, crypto, channelStora
     };
 }
 async function listFilesWithDeps(secret, crypto, channelStorage) {
-    const volume = await openVolume(normalizeSecret(secret), crypto);
+    const volume = await openChannel(normalizeSecret(secret), crypto);
     const entries = await loadEventLog(volume, channelStorage, crypto);
     await verifyEventLog(entries, volume, crypto);
     return materializeFilesFromEntries(entries);
 }
 async function getFileWithDeps(secret, blobHash, crypto, channelStorage) {
     const normalizedSecret = normalizeSecret(secret);
-    const volume = await openVolume(normalizedSecret, crypto);
+    const volume = await openChannel(normalizedSecret, crypto);
     const entries = await loadEventLog(volume, channelStorage, crypto);
     await verifyEventLog(entries, volume, crypto);
     const currentFile = materializeStoredFilesFromEntries(entries).find((file) => file.blobHash === blobHash);
@@ -171,12 +171,12 @@ async function getFileWithDeps(secret, blobHash, crypto, channelStorage) {
         throw new DecryptionError('File is not available in the active volume');
     }
     const keyPair = await crypto.deriveKeys(normalizedSecret);
-    const encryptedData = await channelStorage.blocks.retrieve(blobHash, keyPair.publicKey);
+    const encryptedData = await channelStorage.blocks.retrieve(blobHash);
     const plaintext = await decryptFileForVolume(crypto, keyPair.privateKey, encryptedData, currentFile.encryptedKey);
     return Buffer.from(plaintext);
 }
 async function computeSnapshotWithDeps(secret, crypto, channelStorage, now) {
-    const volume = await openVolume(normalizeSecret(secret), crypto);
+    const volume = await openChannel(normalizeSecret(secret), crypto);
     const entries = await loadEventLog(volume, channelStorage, crypto);
     await verifyEventLog(entries, volume, crypto);
     const generatedAt = now();
@@ -190,14 +190,14 @@ async function computeSnapshotWithDeps(secret, crypto, channelStorage, now) {
     };
 }
 async function getTimelineWithDeps(secret, crypto, channelStorage) {
-    const volume = await openVolume(normalizeSecret(secret), crypto);
+    const volume = await openChannel(normalizeSecret(secret), crypto);
     const entries = await loadEventLog(volume, channelStorage, crypto);
     await verifyEventLog(entries, volume, crypto);
     return mapEntriesToTimeline(entries);
 }
 async function getTimelineDeltaWithDeps(secret, afterEventHash, crypto, channelStorage) {
     // docs/specs/application/hash-cursor-refresh-v0.1.md
-    const volume = await openVolume(normalizeSecret(secret), crypto);
+    const volume = await openChannel(normalizeSecret(secret), crypto);
     const entries = await loadEventLog(volume, channelStorage, crypto);
     await verifyEventLog(entries, volume, crypto);
     const timeline = mapEntriesToTimeline(entries);
@@ -245,7 +245,7 @@ function normalizeTimelineCursor(afterEventHash) {
     return normalized;
 }
 async function getEventWithDeps(secret, eventHash, crypto, channelStorage) {
-    const volume = await openVolume(normalizeSecret(secret), crypto);
+    const volume = await openChannel(normalizeSecret(secret), crypto);
     const hash = createHash(eventHash);
     const keyPair = await crypto.deriveKeys(volume.secret);
     const signedEvent = await channelStorage.events.retrieveEvent(keyPair.publicKey, hash);
@@ -268,7 +268,7 @@ async function exportSourceReferencesWithDeps(secret, filenames, crypto, channel
     if (orderedFilenames.length === 0) {
         throw new Error('At least one filename is required');
     }
-    const volume = await openVolume(normalizedSecret, crypto);
+    const volume = await openChannel(normalizedSecret, crypto);
     const keyPair = await crypto.deriveKeys(normalizedSecret);
     let { files } = await loadVolumeFiles(crypto, channelStorage, volume);
     let upgradedCount = 0;
@@ -315,7 +315,7 @@ async function importSourceReferencesWithDeps(destinationSecret, bundleValue, so
     if (bundle.s !== sourceVolumeId) {
         throw new Error('Source reference bundle does not match the provided source volume');
     }
-    const destinationVolume = await openVolume(normalizedDestinationSecret, crypto);
+    const destinationVolume = await openChannel(normalizedDestinationSecret, crypto);
     const { entries, files } = await loadVolumeFiles(crypto, channelStorage, destinationVolume);
     const imported = await importSourceBundleItems(bundle, files, entries, destinationKeyPair, sourceKeyPair, crypto, channelStorage, now);
     return { imported };
@@ -327,7 +327,7 @@ async function exportRecipientReferencesWithDeps(secret, filenames, recipientVol
         throw new Error('At least one filename is required');
     }
     publicKeyFromVolumeId(recipientVolumeId);
-    const volume = await openVolume(normalizedSecret, crypto);
+    const volume = await openChannel(normalizedSecret, crypto);
     const keyPair = await crypto.deriveKeys(normalizedSecret);
     let { files } = await loadVolumeFiles(crypto, channelStorage, volume);
     let upgradedCount = 0;
@@ -384,7 +384,7 @@ async function importRecipientReferencesWithDeps(secret, bundleValue, crypto, ch
     if (bundle.r !== activeVolumeId) {
         throw new Error('Recipient reference bundle does not match the active volume');
     }
-    const destinationVolume = await openVolume(normalizedSecret, crypto);
+    const destinationVolume = await openChannel(normalizedSecret, crypto);
     const { entries, files } = await loadVolumeFiles(crypto, channelStorage, destinationVolume);
     const takenNames = new Set(files.map((file) => file.filename));
     const imported = [];
@@ -394,7 +394,7 @@ async function importRecipientReferencesWithDeps(secret, bundleValue, crypto, ch
         takenNames.add(finalName);
         const descriptor = item.ref.c;
         const fileKey = await unwrapRecipientKeyCapsule(destinationKeyPair.privateKey, activeVolumeId, descriptor, item.ref.k);
-        await ensureDestinationBlockAvailable(channelStorage, descriptor.h, destinationKeyPair.publicKey);
+        await ensureDestinationBlockAvailable(channelStorage, descriptor.h);
         const encryptedKey = await wrapFileKeyForVolume(crypto, destinationKeyPair.privateKey, fileKey);
         const createdAt = resolveImportedCreatedAt(item.createdAt, nextTimestamp);
         await appendCreateEvent(channelStorage, crypto, destinationKeyPair, {
@@ -696,10 +696,10 @@ async function upgradeLegacyFilesForExport(filenames, files, keyPair, crypto, ch
         if (file.encryptedKey.length > 0) {
             continue;
         }
-        const encryptedData = await channelStorage.blocks.retrieve(file.blobHash, keyPair.publicKey);
+        const encryptedData = await channelStorage.blocks.retrieve(file.blobHash);
         const plaintext = await decryptFileForVolume(crypto, keyPair.privateKey, encryptedData, file.encryptedKey);
         const encrypted = await encryptFileForVolume(crypto, keyPair.privateKey, plaintext);
-        await channelStorage.blocks.store(encrypted.blobHash, encrypted.encryptedData, true, keyPair.publicKey);
+        await channelStorage.blocks.store(encrypted.blobHash, encrypted.encryptedData, true);
         await appendCreateEvent(channelStorage, crypto, keyPair, {
             filename: file.filename,
             blobHash: encrypted.blobHash,
@@ -721,7 +721,7 @@ async function importSourceBundleItems(bundle, existingFiles, entries, destinati
         const finalName = resolveImportedFilename(item.name, takenNames);
         takenNames.add(finalName);
         const fileKey = await unwrapFileKeyForVolume(crypto, sourceKeyPair.privateKey, decodeWrappedKey(item.ref.x, 'Source reference wrapped key'));
-        await ensureDestinationBlockAvailable(channelStorage, item.ref.c.h, destinationKeyPair.publicKey);
+        await ensureDestinationBlockAvailable(channelStorage, item.ref.c.h);
         const encryptedKey = await wrapFileKeyForVolume(crypto, destinationKeyPair.privateKey, fileKey);
         const createdAt = resolveImportedCreatedAt(item.createdAt, nextTimestamp);
         await appendCreateEvent(channelStorage, crypto, destinationKeyPair, {
@@ -744,10 +744,9 @@ async function importSourceBundleItems(bundle, existingFiles, entries, destinati
     }
     return imported;
 }
-async function ensureDestinationBlockAvailable(channelStorage, blobHash, destinationPublicKey) {
-    // Retrieve validates the block bytes; then re-store under the destination channel
-    const encryptedData = await channelStorage.blocks.retrieve(blobHash, undefined);
-    await channelStorage.blocks.store(blobHash, encryptedData, false, destinationPublicKey);
+async function ensureDestinationBlockAvailable(channelStorage, blobHash) {
+    const encryptedData = await channelStorage.blocks.retrieve(blobHash);
+    await channelStorage.blocks.store(blobHash, encryptedData, false);
 }
 function nextCreateTimestamp(entries, fallbackNow) {
     const timeline = mapEntriesToTimeline([...entries]);

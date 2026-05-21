@@ -57,7 +57,7 @@ export async function storeData(
   const dataHash = await computeHash(encryptedData);
 
   // 5. Store encrypted data
-  await channelStorage.blocks.store(dataHash, encryptedData, false, keyPair.publicKey);
+  await channelStorage.blocks.store(dataHash, encryptedData, false);
 
   // 6. Derive symmetric key for encrypting the data encryption key
   const keyEncryptionKey = await crypto.deriveSymKey(keyPair.privateKey);
@@ -126,10 +126,7 @@ export async function retrieveData(
   if (createPayload.content.protocol !== 'nb.content.single.v1') {
     throw new Error(`Unsupported content protocol: ${createPayload.content.protocol}`);
   }
-  const encryptedData = await channelStorage.blocks.retrieve(
-    createPayload.content.blockHash,
-    keyPair.publicKey
-  );
+  const encryptedData = await channelStorage.blocks.retrieve(createPayload.content.blockHash);
 
   // 7. Decrypt data
   const plaintext = await crypto.decryptSym(encryptedData, symmetricKey);
@@ -167,10 +164,10 @@ export async function storeDataDeduplicated(
   const dataHash = await computeHash(encryptedData);
 
   // 5. Check if data already exists
-  const dataExists = await channelStorage.blocks.has(dataHash, keyPair.publicKey);
+  const dataExists = await channelStorage.blocks.has(dataHash);
 
   // 6. Store encrypted data (skip if already exists)
-  await channelStorage.blocks.store(dataHash, encryptedData, true, keyPair.publicKey);
+  await channelStorage.blocks.store(dataHash, encryptedData, true);
 
   // 7. Derive symmetric key for encrypting the data encryption key
   const keyEncryptionKey = await crypto.deriveSymKey(keyPair.privateKey);

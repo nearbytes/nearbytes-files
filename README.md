@@ -21,14 +21,12 @@ yarn add nearbytes/nearbytes-files#main
 
 ```ts
 import { createFileService } from 'nearbytes-files';
-import { createLog } from 'nearbytes-log';
+import { createFilesystemLog } from 'nearbytes-log';
 import { createCryptoOperations } from 'nearbytes-crypto';
-import { FilesystemStorageBackend } from 'nearbytes-storage';
 
-const storage = new FilesystemStorageBackend('/path/to/data');
-const log     = createLog(storage);
-const crypto  = createCryptoOperations();
-const files   = createFileService({ log, crypto });
+const log = createFilesystemLog('/path/to/data');
+const crypto = createCryptoOperations();
+const files = createFileService({ log, crypto });
 
 // Add a file
 const meta = await files.addFile('myvol:password', 'hello.txt', Buffer.from('Hello!'));

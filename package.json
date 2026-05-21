@@ -29,10 +29,9 @@
   },
   "dependencies": {
     "commander": "^12.0.0",
-    "nearbytes-crypto": "nearbytes/nearbytes-crypto#main",
-    "nearbytes-log": "nearbytes/nearbytes-log#main",
-    "nearbytes-skeleton": "nearbytes/nearbytes-skeleton#main",
-    "nearbytes-storage": "nearbytes/nearbytes-storage#main"
+    "nearbytes-crypto": "file:../nearbytes-crypto",
+    "nearbytes-log": "file:../nearbytes-log",
+    "nearbytes-skeleton": "file:../nearbytes-skeleton"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

@@ -62,11 +62,11 @@ export {
 export { reconstructFileState } from './fileState.js';
 export { isFileEvent, encodeFileEvent, decodeFileEvent } from './fileEventCodec.js';
 export { dedupeOrderedFilenames, resolveImportedFilename } from './fileCommands.js';
+export type { Channel } from 'nearbytes-log';
+export { openChannel, loadEventLog, verifyEventLog } from 'nearbytes-log';
 export type { Volume, VolumeFileMetadata, VolumeFileSystemState } from './volume.js';
 export {
   openVolume,
-  loadEventLog,
-  verifyEventLog,
   replayEvents,
   materializeVolume,
   getFile,

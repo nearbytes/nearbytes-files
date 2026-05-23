@@ -158,10 +158,16 @@ export async function waitForBenchEvent(
   timeoutMs: number,
 ): Promise<BenchMarker> {
   const deadline = Date.now() + timeoutMs;
+  let lastBeat = 0;
   while (Date.now() < deadline) {
     const markers = await readBenchMarkers(log);
     const hit = markers.find((m) => m.event === event && m.t >= sinceWallMs);
     if (hit) return hit;
+    if (Date.now() - lastBeat >= 3000) {
+      const leftSec = Math.ceil((deadline - Date.now()) / 1000);
+      benchProgress('sync', `waiting for ${event} (${leftSec}s timeout left)`);
+      lastBeat = Date.now();
+    }
     await sleep(200);
   }
   throw new Error(`Timed out waiting for bench event "${event}"`);
@@ -209,6 +215,33 @@ export async function waitForBenchFilename(
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Sleep with periodic heartbeats so long waits never look stuck. */
+export async function sleepWithProgress(
+  role: string,
+  label: string,
+  ms: number,
+  tickMs = 3000,
+): Promise<void> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    const leftSec = Math.max(1, Math.ceil((end - Date.now()) / 1000));
+    benchProgress(role, `${label} — ${leftSec}s remaining`);
+    await sleep(Math.min(tickMs, end - Date.now()));
+  }
+}
+
+let progressOriginMs = Date.now();
+
+export function resetProgressClock(): void {
+  progressOriginMs = Date.now();
+}
+
+/** Line-buffered progress for long benchmark runs (visible in CI and remote SSH). */
+export function benchProgress(role: string, message: string): void {
+  const elapsed = ((Date.now() - progressOriginMs) / 1000).toFixed(1);
+  process.stdout.write(`[bench ${role} +${elapsed}s] ${message}\n`);
 }
 
 export async function createBenchContext(config: NearbytesConfig): Promise<Context> {

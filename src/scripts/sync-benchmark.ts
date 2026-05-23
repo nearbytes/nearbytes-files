@@ -29,6 +29,9 @@ import {
   readReceptionTail,
   setupBenchConfig,
   sleep,
+  sleepWithProgress,
+  benchProgress,
+  resetProgressClock,
   waitForBenchEvent,
   type BenchMarker,
   type TrialManifestEntry,
@@ -80,16 +83,19 @@ async function runSender(ctx: Awaited<ReturnType<typeof createBenchContext>>): P
   trials: TrialManifestEntry[];
 }> {
   const warmupMs = Number(process.env['NEARBYTES_BENCH_DISCOVERY_MS'] ?? '15000');
-  console.log(`[sender] discovery wait ${warmupMs}ms…`);
-  await sleep(warmupMs);
+  await sleepWithProgress('sender', 'phase 2/4 — discovery / swarm warmup', warmupMs);
 
   await openAndWatch(ctx, BENCH_CREDENTIALS.volume, true);
 
   const latency: LatencyResult[] = [];
   const trials: TrialManifestEntry[] = [];
+  const totalTrials = BENCH_PAYLOAD_SIZES.length * BENCH_LATENCY_REPEATS;
+  let trialIdx = 0;
 
+  benchProgress('sender', `phase 3/4 — latency sweep (${totalTrials} payloads)`);
   for (const sizeBytes of BENCH_PAYLOAD_SIZES) {
     for (let repeat = 0; repeat < BENCH_LATENCY_REPEATS; repeat++) {
+      trialIdx++;
       const name = `bench-lat-${sizeBytes}-${repeat}.bin`;
       const t0 = hrtimeMs();
       const data = makePayload(sizeBytes, repeat + sizeBytes);
@@ -98,8 +104,16 @@ async function runSender(ctx: Awaited<ReturnType<typeof createBenchContext>>): P
       const publishWallMs = Date.now();
       trials.push({ name, sizeBytes, repeat, publishWallMs, publishCpuMs });
       latency.push({ sizeBytes, repeat, name, publishWallMs, publishCpuMs });
-      console.log(`[sender] published ${name} (${sizeBytes} B) cpu=${publishCpuMs.toFixed(1)}ms`);
-      await sleep(Number(process.env['NEARBYTES_BENCH_INTER_TRIAL_MS'] ?? '3000'));
+      benchProgress(
+        'sender',
+        `latency ${trialIdx}/${totalTrials}: ${name} (${sizeBytes} B, cpu ${publishCpuMs.toFixed(1)}ms)`,
+      );
+      await sleepWithProgress(
+        'sender',
+        `inter-trial pause before ${trialIdx + 1}/${totalTrials}`,
+        Number(process.env['NEARBYTES_BENCH_INTER_TRIAL_MS'] ?? '2500'),
+        1000,
+      );
     }
   }
 
@@ -108,11 +122,12 @@ async function runSender(ctx: Awaited<ReturnType<typeof createBenchContext>>): P
     'bench-phase-latency-complete.txt',
     Buffer.from('latency phase complete\n'),
   );
-  console.log('[sender] latency phase complete marker published');
-  await sleep(5000);
+  benchProgress('sender', 'latency phase complete');
+  await sleepWithProgress('sender', 'pause before throughput phase', 5000, 1000);
 
   const tpCount = BENCH_THROUGHPUT_FILE_COUNT;
   const tpBytes = BENCH_THROUGHPUT_FILE_BYTES;
+  benchProgress('sender', `phase 4/4 — throughput ${tpCount}×${tpBytes} B`);
   const publishStartMs = hrtimeMs();
   for (let i = 0; i < tpCount; i++) {
     const name = `bench-tp-${tpBytes}-${i}.bin`;
@@ -121,6 +136,7 @@ async function runSender(ctx: Awaited<ReturnType<typeof createBenchContext>>): P
       name,
       makePayload(tpBytes, i * 997),
     );
+    benchProgress('sender', `throughput file ${i + 1}/${tpCount}: ${name}`);
   }
   const publishEndMs = hrtimeMs();
   await ctx.fileService.addFile(
@@ -128,7 +144,10 @@ async function runSender(ctx: Awaited<ReturnType<typeof createBenchContext>>): P
     'bench-phase-throughput-complete.txt',
     Buffer.from('throughput phase complete\n'),
   );
-  console.log(`[sender] throughput: ${tpCount}×${tpBytes} B in ${(publishEndMs - publishStartMs).toFixed(0)}ms`);
+  benchProgress(
+    'sender',
+    `throughput published ${tpCount}×${tpBytes} B in ${(publishEndMs - publishStartMs).toFixed(0)}ms`,
+  );
 
   return {
     latency,
@@ -150,15 +169,16 @@ async function runReceiver(
   throughput: BenchmarkResult['throughput'];
 }> {
   const warmupMs = Number(process.env['NEARBYTES_BENCH_DISCOVERY_MS'] ?? '15000');
-  console.log(`[receiver] discovery wait ${warmupMs}ms…`);
-  await sleep(warmupMs);
+  await sleepWithProgress('receiver', 'phase 2/4 — discovery / swarm warmup', warmupMs);
   await openAndWatch(ctx, BENCH_CREDENTIALS.volume, true);
 
   const receivedAt = new Map<string, { wallMs: number; cpuMs: number }>();
   const latency: LatencyResult[] = [];
 
   const deadline = Date.now() + Number(process.env['NEARBYTES_BENCH_RECEIVE_TIMEOUT_MS'] ?? '600000');
+  benchProgress('receiver', `phase 3/4 — waiting for ${expectedLatencyTrials} latency payloads…`);
 
+  let lastBeat = Date.now();
   while (Date.now() < deadline) {
     await openAndWatch(ctx, BENCH_CREDENTIALS.volume, true);
     const names = await listBenchFilenames(ctx);
@@ -166,6 +186,14 @@ async function runReceiver(
       if (!receivedAt.has(name)) {
         receivedAt.set(name, { wallMs: Date.now(), cpuMs: hrtimeMs() });
       }
+    }
+    if (Date.now() - lastBeat >= 5000) {
+      const leftSec = Math.ceil((deadline - Date.now()) / 1000);
+      benchProgress(
+        'receiver',
+        `latency wait… ${receivedAt.size} artifacts, ${leftSec}s left`,
+      );
+      lastBeat = Date.now();
     }
     if (receivedAt.has('bench-phase-latency-complete.txt')) {
       break;
@@ -187,17 +215,29 @@ async function runReceiver(
     }
   }
 
-  console.log(
-    `[receiver] latency files seen: ${latency.filter((l) => l.receiveWallMs !== undefined).length}/${expectedLatencyTrials}`,
-  );
+  const latSeen = latency.filter((l) => l.receiveWallMs !== undefined).length;
+  benchProgress('receiver', `latency complete: ${latSeen}/${expectedLatencyTrials} files seen`);
 
+  const tpNames = Array.from({ length: BENCH_THROUGHPUT_FILE_COUNT }, (_, i) =>
+    `bench-tp-${BENCH_THROUGHPUT_FILE_BYTES}-${i}.bin`,
+  );
+  benchProgress('receiver', 'phase 4/4 — waiting for throughput batch…');
+  lastBeat = Date.now();
   while (Date.now() < deadline) {
     await openAndWatch(ctx, BENCH_CREDENTIALS.volume, true);
     const names = await listBenchFilenames(ctx);
     for (const name of names) {
       if (!receivedAt.has(name)) {
         receivedAt.set(name, { wallMs: Date.now(), cpuMs: hrtimeMs() });
+        if (name.startsWith('bench-tp-')) {
+          benchProgress('receiver', `saw ${name}`);
+        }
       }
+    }
+    if (Date.now() - lastBeat >= 5000) {
+      const tpSeen = tpNames.filter((n) => receivedAt.has(n)).length;
+      benchProgress('receiver', `throughput wait… ${tpSeen}/${BENCH_THROUGHPUT_FILE_COUNT} files`);
+      lastBeat = Date.now();
     }
     if (receivedAt.has('bench-phase-throughput-complete.txt')) {
       break;
@@ -205,9 +245,6 @@ async function runReceiver(
     await sleep(250);
   }
 
-  const tpNames = Array.from({ length: BENCH_THROUGHPUT_FILE_COUNT }, (_, i) =>
-    `bench-tp-${BENCH_THROUGHPUT_FILE_BYTES}-${i}.bin`,
-  );
   const firstTp = tpNames.map((n) => receivedAt.get(n)).find((t) => t !== undefined);
   const lastTp = [...tpNames].reverse().map((n) => receivedAt.get(n)).find((t) => t !== undefined);
 
@@ -224,8 +261,9 @@ async function runReceiver(
       receiveCompleteMs: lastTp.cpuMs,
       goodputMbps,
     };
-    console.log(
-      `[receiver] throughput goodput ≈ ${goodputMbps.toFixed(2)} Mb/s (${durationMs.toFixed(0)}ms for ${tpNames.length} files)`,
+    benchProgress(
+      'receiver',
+      `throughput goodput ≈ ${goodputMbps.toFixed(2)} Mb/s (${durationMs.toFixed(0)}ms span)`,
     );
   }
 
@@ -234,9 +272,12 @@ async function runReceiver(
 
 async function main(): Promise<void> {
   const role = benchRoleFromEnv();
+  const roleLabel = role === 'sender' ? 'sender' : 'receiver';
   const startedAt = new Date().toISOString();
   const wallStart = Date.now();
   const runStartMs = hrtimeMs();
+  resetProgressClock();
+  benchProgress(roleLabel, 'phase 1/4 — setup config and start sync');
 
   const { config } = await setupBenchConfig(role);
   const ctx = await createBenchContext(config);
@@ -258,7 +299,7 @@ async function main(): Promise<void> {
     profilePublishMs = profile.publishMs;
     profileEventHash = profile.eventHash;
     profilePublicKey = profile.publicKey;
-    console.log(`[${role}] profile published in ${profilePublishMs.toFixed(1)}ms`);
+    benchProgress(roleLabel, `profile published (${profilePublishMs.toFixed(1)}ms cpu)`);
 
     try {
       const peerMarker = await waitForBenchEvent(
@@ -268,9 +309,12 @@ async function main(): Promise<void> {
         Number(process.env['NEARBYTES_BENCH_SWARM_TIMEOUT_MS'] ?? '120000'),
       );
       swarmFormationMs = peerMarker.t - wallStart;
-      console.log(`[${role}] swarm peer connected at +${swarmFormationMs}ms (${peerMarker.fields['transport']})`);
+      benchProgress(
+        roleLabel,
+        `swarm connected +${swarmFormationMs}ms (transport=${peerMarker.fields['transport']})`,
+      );
     } catch (err) {
-      console.warn(`[${role}] swarm formation not observed: ${String(err)}`);
+      benchProgress(roleLabel, `swarm not observed: ${String(err)}`);
     }
 
     const discoveryWaitMs = Number(process.env['NEARBYTES_BENCH_DISCOVERY_MS'] ?? '15000');
@@ -284,8 +328,7 @@ async function main(): Promise<void> {
         : { latency: [], throughput: null };
 
     const graceMs = Number(process.env['NEARBYTES_BENCH_GRACE_MS'] ?? '30000');
-    console.log(`[${role}] grace ${graceMs}ms…`);
-    await sleep(graceMs);
+    await sleepWithProgress(roleLabel, 'grace hold for peer pull before teardown', graceMs, 5000);
 
     const markers = await readBenchMarkers(ctx.skeleton.log);
     const receptionTail = await readReceptionTail(config.dataDir, 50);
@@ -319,7 +362,7 @@ async function main(): Promise<void> {
       path.join(benchWorkDir(role), 'benchmark-result.json');
     await mkdir(path.dirname(outPath), { recursive: true });
     await writeFile(outPath, JSON.stringify(result, null, 2), 'utf-8');
-    console.log(`[${role}] wrote ${outPath} (run ${(hrtimeMs() - runStartMs).toFixed(0)}ms)`);
+    benchProgress(roleLabel, `done — wrote ${outPath} (total ${(hrtimeMs() - runStartMs).toFixed(0)}ms cpu)`);
 
     if (role === 'sender' && senderLatency.trials.length > 0) {
       const trialPath = path.join(benchWorkDir(role), 'trial-manifest.json');

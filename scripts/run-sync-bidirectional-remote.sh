@@ -56,8 +56,10 @@ run_yarn() {
   else
     export COREPACK_HOME="\$REMOTE_DIR/.corepack"
     mkdir -p "\$COREPACK_HOME"
+    export COREPACK_HOME="\$REMOTE_DIR/.corepack"
+    mkdir -p "\$COREPACK_HOME"
     corepack prepare yarn@4.5.1 --activate
-    yarn "\$@"
+    corepack yarn "\$@"
   fi
 }
 build_repo() {

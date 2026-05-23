@@ -17,7 +17,7 @@
  */
 import * as readline from 'readline';
 import { cyan, dim, red, bold } from './output.js';
-import { cmdSetup, cmdVolumeOpen, cmdVolumeInfo, cmdUse, cmdVolumes, cmdFileAdd, cmdFileList, cmdFileGet, cmdFileRemove, cmdRefresh, cmdTimeline, cmdHelp, } from './commands.js';
+import { cmdSetup, cmdVolumeOpen, cmdVolumeInfo, cmdUse, cmdVolumes, cmdFileAdd, cmdFileList, cmdFileGet, cmdFileRemove, cmdRefresh, cmdTimeline, cmdHelp, cmdFriendList, cmdFriendAdd, cmdFriendRemove, cmdFriendShow, cmdProfileInit, cmdProfileShow, cmdProfilePublish, } from './commands.js';
 import { createReplCompleter } from './replCompleter.js';
 import { loadReplHistory, createReplHistorySession, attachReverseSearch, REPL_HISTORY_MAX_ENTRIES, } from './replHistory.js';
 import { installReplInterruptHandlers } from './replTerminal.js';
@@ -123,6 +123,69 @@ async function dispatch(ctx, tokens) {
         case 'timeline': {
             const secret = resolveSecret(ctx, rest);
             await cmdTimeline(ctx, secret);
+            break;
+        }
+        // ---- profile ----
+        case 'profile': {
+            const [subverb, ...subargs] = rest;
+            switch ((subverb ?? '').toLowerCase()) {
+                case 'init': {
+                    const [secret] = subargs;
+                    if (!secret)
+                        throw new Error('Usage: profile init <secret>');
+                    await cmdProfileInit(ctx, secret);
+                    break;
+                }
+                case 'show':
+                    await cmdProfileShow(ctx);
+                    break;
+                case 'publish': {
+                    const [displayName, ...bioParts] = subargs;
+                    if (!displayName)
+                        throw new Error('Usage: profile publish <displayName> [bio]');
+                    await cmdProfilePublish(ctx, displayName, bioParts.length > 0 ? bioParts.join(' ') : undefined);
+                    break;
+                }
+                default:
+                    throw new Error(`Unknown profile sub-command: ${subverb ?? '(none)'}`);
+            }
+            break;
+        }
+        // ---- friends ----
+        case 'friend': {
+            const [subverb, ...subargs] = rest;
+            switch ((subverb ?? '').toLowerCase()) {
+                case 'list':
+                case 'ls':
+                    await cmdFriendList(ctx);
+                    break;
+                case 'add': {
+                    const [pk] = subargs;
+                    if (!pk)
+                        throw new Error('Usage: friend add <profile-public-key-hex>');
+                    await cmdFriendAdd(ctx, pk);
+                    break;
+                }
+                case 'remove':
+                case 'rm':
+                case 'del':
+                case 'delete': {
+                    const [pk] = subargs;
+                    if (!pk)
+                        throw new Error('Usage: friend remove <profile-public-key-hex|prefix>');
+                    await cmdFriendRemove(ctx, pk);
+                    break;
+                }
+                case 'show': {
+                    const [pk] = subargs;
+                    if (!pk)
+                        throw new Error('Usage: friend show <profile-public-key-hex>');
+                    await cmdFriendShow(ctx, pk);
+                    break;
+                }
+                default:
+                    throw new Error(`Unknown friend sub-command: ${subverb ?? '(none)'}`);
+            }
             break;
         }
         // ---- file ----
@@ -234,8 +297,7 @@ export async function startRepl(ctx) {
             .then(() => rl.prompt())
             .catch((err) => {
             if (err instanceof ExitReplSignal) {
-                ctx.destroy();
-                rl.close();
+                void ctx.destroy().then(() => rl.close());
                 return;
             }
             const msg = err instanceof Error ? err.message : String(err);
@@ -247,8 +309,7 @@ export async function startRepl(ctx) {
         void historySession.flush().finally(() => {
             console.log('');
             console.log(dim('Goodbye.'));
-            ctx.destroy();
-            process.exit(0);
+            void ctx.destroy().then(() => process.exit(0));
         });
     });
 }

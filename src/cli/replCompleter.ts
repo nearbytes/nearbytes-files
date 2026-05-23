@@ -19,6 +19,8 @@ import {
 
 const TOP_LEVEL = [
   'setup',
+  'profile',
+  'friend',
   'volume',
   'volumes',
   'use',
@@ -30,6 +32,9 @@ const TOP_LEVEL = [
   'exit',
   'quit',
 ] as const;
+
+const PROFILE_SUB = ['init', 'show', 'publish'] as const;
+const FRIEND_SUB = ['list', 'ls', 'add', 'remove', 'rm', 'del', 'delete', 'show'] as const;
 
 const VOLUME_SUB = ['open', 'info', 'show'] as const;
 
@@ -224,6 +229,32 @@ function suggest(ctx: Context, prefix: string[], partial: string): string[] {
 
     case 'setup':
       return filterByPartial(knownSecrets(ctx), partial);
+
+    case 'profile': {
+      const [sub] = rest;
+      if (!sub) {
+        return filterByPartial([...PROFILE_SUB], partial);
+      }
+      if (sub.toLowerCase() === 'init') {
+        return filterByPartial(knownSecrets(ctx), partial);
+      }
+      if (sub.toLowerCase() === 'publish') {
+        return filterByPartial([], partial);
+      }
+      return [];
+    }
+
+    case 'friend': {
+      const [sub] = rest;
+      if (!sub) {
+        return filterByPartial([...FRIEND_SUB], partial);
+      }
+      const lowerSub = sub.toLowerCase();
+      if (lowerSub === 'list' || lowerSub === 'ls') {
+        return [];
+      }
+      return filterByPartial([...ctx.config.friends], partial);
+    }
 
     case 'use':
       return filterByPartial(

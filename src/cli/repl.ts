@@ -31,6 +31,13 @@ import {
   cmdRefresh,
   cmdTimeline,
   cmdHelp,
+  cmdFriendList,
+  cmdFriendAdd,
+  cmdFriendRemove,
+  cmdFriendShow,
+  cmdProfileInit,
+  cmdProfileShow,
+  cmdProfilePublish,
 } from './commands.js';
 import type { Context } from './context.js';
 import { createReplCompleter } from './replCompleter.js';
@@ -139,6 +146,66 @@ async function dispatch(ctx: Context, tokens: string[]): Promise<void> {
     case 'timeline': {
       const secret = resolveSecret(ctx, rest);
       await cmdTimeline(ctx, secret);
+      break;
+    }
+
+    // ---- profile ----
+    case 'profile': {
+      const [subverb, ...subargs] = rest;
+      switch ((subverb ?? '').toLowerCase()) {
+        case 'init': {
+          const [secret] = subargs;
+          if (!secret) throw new Error('Usage: profile init <secret>');
+          await cmdProfileInit(ctx, secret);
+          break;
+        }
+        case 'show':
+          await cmdProfileShow(ctx);
+          break;
+        case 'publish': {
+          const [displayName, ...bioParts] = subargs;
+          if (!displayName) throw new Error('Usage: profile publish <displayName> [bio]');
+          await cmdProfilePublish(ctx, displayName, bioParts.length > 0 ? bioParts.join(' ') : undefined);
+          break;
+        }
+        default:
+          throw new Error(`Unknown profile sub-command: ${subverb ?? '(none)'}`);
+      }
+      break;
+    }
+
+    // ---- friends ----
+    case 'friend': {
+      const [subverb, ...subargs] = rest;
+      switch ((subverb ?? '').toLowerCase()) {
+        case 'list':
+        case 'ls':
+          await cmdFriendList(ctx);
+          break;
+        case 'add': {
+          const [pk] = subargs;
+          if (!pk) throw new Error('Usage: friend add <profile-public-key-hex>');
+          await cmdFriendAdd(ctx, pk);
+          break;
+        }
+        case 'remove':
+        case 'rm':
+        case 'del':
+        case 'delete': {
+          const [pk] = subargs;
+          if (!pk) throw new Error('Usage: friend remove <profile-public-key-hex|prefix>');
+          await cmdFriendRemove(ctx, pk);
+          break;
+        }
+        case 'show': {
+          const [pk] = subargs;
+          if (!pk) throw new Error('Usage: friend show <profile-public-key-hex>');
+          await cmdFriendShow(ctx, pk);
+          break;
+        }
+        default:
+          throw new Error(`Unknown friend sub-command: ${subverb ?? '(none)'}`);
+      }
       break;
     }
 

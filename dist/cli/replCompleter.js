@@ -9,6 +9,8 @@ import { expandTildeInPartial, pathEndsWithSeparator, pathHasSeparator, preferre
 // ---------------------------------------------------------------------------
 const TOP_LEVEL = [
     'setup',
+    'profile',
+    'friend',
     'volume',
     'volumes',
     'use',
@@ -20,6 +22,8 @@ const TOP_LEVEL = [
     'exit',
     'quit',
 ];
+const PROFILE_SUB = ['init', 'show', 'publish'];
+const FRIEND_SUB = ['list', 'ls', 'add', 'remove', 'rm', 'del', 'delete', 'show'];
 const VOLUME_SUB = ['open', 'info', 'show'];
 const FILE_SUB = ['add', 'list', 'ls', 'get', 'rm', 'remove', 'del', 'delete'];
 const SECRET_FLAGS = ['-s', '--secret'];
@@ -204,6 +208,30 @@ function suggest(ctx, prefix, partial) {
             return filterByPartial([...SECRET_FLAGS, ...knownSecrets(ctx)], partial);
         case 'setup':
             return filterByPartial(knownSecrets(ctx), partial);
+        case 'profile': {
+            const [sub] = rest;
+            if (!sub) {
+                return filterByPartial([...PROFILE_SUB], partial);
+            }
+            if (sub.toLowerCase() === 'init') {
+                return filterByPartial(knownSecrets(ctx), partial);
+            }
+            if (sub.toLowerCase() === 'publish') {
+                return filterByPartial([], partial);
+            }
+            return [];
+        }
+        case 'friend': {
+            const [sub] = rest;
+            if (!sub) {
+                return filterByPartial([...FRIEND_SUB], partial);
+            }
+            const lowerSub = sub.toLowerCase();
+            if (lowerSub === 'list' || lowerSub === 'ls') {
+                return [];
+            }
+            return filterByPartial([...ctx.config.friends], partial);
+        }
         case 'use':
             return filterByPartial([...volumeKeyPrefixes(ctx), ...knownSecrets(ctx)], partial);
         case 'volume': {

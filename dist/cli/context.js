@@ -3,13 +3,13 @@
  */
 import { createFileService } from '../fileService.js';
 import { createReactiveVolume } from '../reactiveVolume.js';
-import { createFilesystemSkeleton, createFilesystemWatcher, } from 'nearbytes-skeleton';
+import { createFilesystemSkeletonFromConfig, createFilesystemWatcher, } from 'nearbytes-skeleton';
 import { createSecret, bytesToHex } from 'nearbytes-crypto';
 /**
  * Creates a CLI context: filesystem log, file service, empty volume cache.
  */
 export async function createContext(config) {
-    const skeleton = await createFilesystemSkeleton(config.dataDir);
+    const skeleton = await createFilesystemSkeletonFromConfig(config);
     const fileService = createFileService({ log: skeleton.log, crypto: skeleton.crypto });
     const volumes = new Map();
     const watchers = new Map();
@@ -20,10 +20,11 @@ export async function createContext(config) {
         activeVolume: null,
         volumes,
         watchers,
-        destroy() {
+        async destroy() {
             for (const w of watchers.values())
                 w.close();
             watchers.clear();
+            await skeleton.destroy();
         },
     };
 }

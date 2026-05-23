@@ -32,6 +32,8 @@ export declare function cmdFileRemove(ctx: Context, filename: string, secret: st
 export declare function cmdTimeline(ctx: Context, secret: string): Promise<void>;
 export declare function cmdRefresh(ctx: Context): Promise<void>;
 export declare function cmdVolumes(ctx: Context): Promise<void>;
+export { cmdFriendList, cmdFriendAdd, cmdFriendRemove, cmdFriendShow } from './friendsCommands.js';
+export { cmdProfileInit, cmdProfileShow, cmdProfilePublish } from './profileCommands.js';
 export declare function cmdHelp(): void;
 export { red };
 //# sourceMappingURL=commands.d.ts.map

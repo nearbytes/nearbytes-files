@@ -13,9 +13,9 @@
  *     volume) across commands.  Suitable for interactive exploration.
  */
 import { Command } from 'commander';
-import { readConfig, defaultDataDir } from 'nearbytes-skeleton';
+import { readConfig, emptyConfig, defaultDataDir } from 'nearbytes-skeleton';
 import { createContext } from './context.js';
-import { cmdSetup, cmdVolumeOpen, cmdFileAdd, cmdFileList, cmdFileGet, cmdFileRemove, cmdTimeline, red, } from './commands.js';
+import { cmdSetup, cmdVolumeOpen, cmdFileAdd, cmdFileList, cmdFileGet, cmdFileRemove, cmdTimeline, cmdFriendList, cmdFriendAdd, cmdFriendRemove, cmdProfileInit, cmdProfileShow, cmdProfilePublish, red, } from './commands.js';
 import { startRepl } from './repl.js';
 // ---------------------------------------------------------------------------
 // Helpers
@@ -48,7 +48,7 @@ program
     .description('Start an interactive REPL (interpreter mode)')
     .action(async () => {
     const opts = program.opts();
-    const config = await readConfig(opts.config).catch(() => ({ dataDir: opts.dataDir, volumes: [] }));
+    const config = await readConfig(opts.config).catch(() => emptyConfig(opts.dataDir));
     const ctx = await createContext({ ...config, dataDir: opts.dataDir ?? config.dataDir });
     await startRepl(ctx);
 });
@@ -59,7 +59,7 @@ program
     .requiredOption('-s, --secret <secret>', 'Channel secret  e.g. "myvolume:password"')
     .action(async (opts) => {
     const gopts = program.opts();
-    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(() => cmdSetup(ctx, opts.secret));
 });
@@ -71,7 +71,7 @@ volumeCmd
     .requiredOption('-s, --secret <secret>', 'Volume secret')
     .action(async (opts) => {
     const gopts = program.opts();
-    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(() => cmdVolumeOpen(ctx, opts.secret, false));
 });
@@ -95,7 +95,7 @@ program
     .requiredOption('-s, --secret <secret>', 'Volume secret')
     .action(async (opts) => {
     const gopts = program.opts();
-    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(() => cmdTimeline(ctx, opts.secret));
 });
@@ -109,7 +109,7 @@ fileCmd
     .option('-n, --name <name>', 'Name to store the file under (default: basename of path)')
     .action(async (opts) => {
     const gopts = program.opts();
-    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(() => cmdFileAdd(ctx, opts.path, opts.secret, opts.name));
 });
@@ -120,7 +120,7 @@ fileCmd
     .requiredOption('-s, --secret <secret>', 'Volume secret')
     .action(async (opts) => {
     const gopts = program.opts();
-    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(() => cmdFileList(ctx, opts.secret));
 });
@@ -132,7 +132,7 @@ fileCmd
     .requiredOption('-o, --output <path>', 'Output file path')
     .action(async (opts) => {
     const gopts = program.opts();
-    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(() => cmdFileGet(ctx, opts.name, opts.secret, opts.output));
 });
@@ -144,9 +144,92 @@ fileCmd
     .requiredOption('-s, --secret <secret>', 'Volume secret')
     .action(async (opts) => {
     const gopts = program.opts();
-    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(() => cmdFileRemove(ctx, opts.name, opts.secret));
+});
+// ── profile ───────────────────────────────────────────────────────────────
+const profileCmd = program.command('profile').description('Profile identity for sync');
+profileCmd
+    .command('init')
+    .description('Save profile secret and print profile public key')
+    .requiredOption('-s, --secret <secret>', 'Profile secret (name:password)')
+    .action(async (opts) => {
+    const gopts = program.opts();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+        await cmdProfileInit(ctx, opts.secret);
+        await ctx.destroy();
+    });
+});
+profileCmd
+    .command('show')
+    .description('Show profile public key from config')
+    .action(async () => {
+    const gopts = program.opts();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+        await cmdProfileShow(ctx);
+        await ctx.destroy();
+    });
+});
+profileCmd
+    .command('publish')
+    .description('Publish identity record on profile channel')
+    .requiredOption('-n, --name <name>', 'Display name')
+    .option('-b, --bio <bio>', 'Optional bio')
+    .action(async (opts) => {
+    const gopts = program.opts();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+        await cmdProfilePublish(ctx, opts.name, opts.bio);
+        await ctx.destroy();
+    });
+});
+// ── friend ────────────────────────────────────────────────────────────────
+const friendCmd = program.command('friend').description('Follow friends for sync');
+friendCmd
+    .command('list')
+    .alias('ls')
+    .description('List followed profile public keys')
+    .action(async () => {
+    const gopts = program.opts();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+        await cmdFriendList(ctx);
+        await ctx.destroy();
+    });
+});
+friendCmd
+    .command('add')
+    .description('Follow a friend by profile public key')
+    .argument('<publicKey>', 'Friend profile public key (130 hex chars)')
+    .action(async (publicKey) => {
+    const gopts = program.opts();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+        await cmdFriendAdd(ctx, publicKey);
+        await ctx.destroy();
+    });
+});
+friendCmd
+    .command('remove')
+    .alias('rm')
+    .description('Unfollow a friend')
+    .argument('<publicKeyOrPrefix>', 'Friend key or prefix')
+    .action(async (publicKeyOrPrefix) => {
+    const gopts = program.opts();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+        await cmdFriendRemove(ctx, publicKeyOrPrefix);
+        await ctx.destroy();
+    });
 });
 // ── parse ─────────────────────────────────────────────────────────────────
 program.parse();

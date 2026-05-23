@@ -24,6 +24,12 @@ import {
   cmdFileGet,
   cmdFileRemove,
   cmdTimeline,
+  cmdFriendList,
+  cmdFriendAdd,
+  cmdFriendRemove,
+  cmdProfileInit,
+  cmdProfileShow,
+  cmdProfilePublish,
   red,
 } from './commands.js';
 import { startRepl } from './repl.js';
@@ -179,6 +185,99 @@ fileCmd
     const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(() => cmdFileRemove(ctx, opts.name, opts.secret));
+  });
+
+// ── profile ───────────────────────────────────────────────────────────────
+
+const profileCmd = program.command('profile').description('Profile identity for sync');
+
+profileCmd
+  .command('init')
+  .description('Save profile secret and print profile public key')
+  .requiredOption('-s, --secret <secret>', 'Profile secret (name:password)')
+  .action(async (opts: { secret: string }) => {
+    const gopts = program.opts<{ config?: string; dataDir: string }>();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+      await cmdProfileInit(ctx, opts.secret);
+      await ctx.destroy();
+    });
+  });
+
+profileCmd
+  .command('show')
+  .description('Show profile public key from config')
+  .action(async () => {
+    const gopts = program.opts<{ config?: string; dataDir: string }>();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+      await cmdProfileShow(ctx);
+      await ctx.destroy();
+    });
+  });
+
+profileCmd
+  .command('publish')
+  .description('Publish identity record on profile channel')
+  .requiredOption('-n, --name <name>', 'Display name')
+  .option('-b, --bio <bio>', 'Optional bio')
+  .action(async (opts: { name: string; bio?: string }) => {
+    const gopts = program.opts<{ config?: string; dataDir: string }>();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+      await cmdProfilePublish(ctx, opts.name, opts.bio);
+      await ctx.destroy();
+    });
+  });
+
+// ── friend ────────────────────────────────────────────────────────────────
+
+const friendCmd = program.command('friend').description('Follow friends for sync');
+
+friendCmd
+  .command('list')
+  .alias('ls')
+  .description('List followed profile public keys')
+  .action(async () => {
+    const gopts = program.opts<{ config?: string; dataDir: string }>();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+      await cmdFriendList(ctx);
+      await ctx.destroy();
+    });
+  });
+
+friendCmd
+  .command('add')
+  .description('Follow a friend by profile public key')
+  .argument('<publicKey>', 'Friend profile public key (130 hex chars)')
+  .action(async (publicKey: string) => {
+    const gopts = program.opts<{ config?: string; dataDir: string }>();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+      await cmdFriendAdd(ctx, publicKey);
+      await ctx.destroy();
+    });
+  });
+
+friendCmd
+  .command('remove')
+  .alias('rm')
+  .description('Unfollow a friend')
+  .argument('<publicKeyOrPrefix>', 'Friend key or prefix')
+  .action(async (publicKeyOrPrefix: string) => {
+    const gopts = program.opts<{ config?: string; dataDir: string }>();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+      await cmdFriendRemove(ctx, publicKeyOrPrefix);
+      await ctx.destroy();
+    });
   });
 
 // ── parse ─────────────────────────────────────────────────────────────────

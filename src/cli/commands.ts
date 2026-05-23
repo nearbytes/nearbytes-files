@@ -228,12 +228,26 @@ export async function cmdVolumes(ctx: Context): Promise<void> {
 // help
 // ---------------------------------------------------------------------------
 
+export { cmdFriendList, cmdFriendAdd, cmdFriendRemove, cmdFriendShow } from './friendsCommands.js';
+export { cmdProfileInit, cmdProfileShow, cmdProfilePublish } from './profileCommands.js';
+
 export function cmdHelp(): void {
   console.log(`
 ${bold('Nearbytes REPL')}
 
+${cyan('Profile (sync identity)')}
+  profile init <secret>           Save profile secret; show your profile public key
+  profile show                    Show profile public key from config
+  profile publish <displayName>   Publish nb.identity.record.v1 on your profile channel
+
+${cyan('Friends (asymmetric follow)')}
+  friend list                     List followed profile public keys
+  friend add <profile-pubkey>     Follow a friend (sync their profile topic)
+  friend remove <key|prefix>      Stop following
+  friend show <profile-pubkey>    Show a key (for sharing)
+
 ${cyan('Volume commands')}
-  setup <secret>                  Derive and display public key for a secret
+  setup <secret>                  Derive and display public key for a volume secret
   volume open <secret>            Open a volume and display its file list
   volumes                         List all open volumes in this session
   use <key-prefix|secret>         Set active volume

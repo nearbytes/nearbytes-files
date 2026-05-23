@@ -14,7 +14,7 @@ import {
 import { createSecret, bytesToHex } from 'nearbytes-crypto';
 
 export interface Context {
-  readonly config: NearbytesConfig;
+  config: NearbytesConfig;
   readonly skeleton: NearbytesSkeleton;
   readonly fileService: FileService;
   activeVolume: ReactiveVolume | null;

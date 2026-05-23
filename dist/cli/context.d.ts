@@ -5,13 +5,13 @@ import { type FileService } from '../fileService.js';
 import { type ReactiveVolume } from '../reactiveVolume.js';
 import { type NearbytesSkeleton, type VolumeWatcher, type NearbytesConfig } from 'nearbytes-skeleton';
 export interface Context {
-    readonly config: NearbytesConfig;
+    config: NearbytesConfig;
     readonly skeleton: NearbytesSkeleton;
     readonly fileService: FileService;
     activeVolume: ReactiveVolume | null;
     readonly volumes: Map<string, ReactiveVolume>;
     readonly watchers: Map<string, VolumeWatcher>;
-    destroy(): void;
+    destroy(): Promise<void>;
 }
 /**
  * Creates a CLI context: filesystem log, file service, empty volume cache.

@@ -258,8 +258,7 @@ export async function startRepl(ctx: Context): Promise<void> {
       .then(() => rl.prompt())
       .catch((err: unknown) => {
         if (err instanceof ExitReplSignal) {
-          ctx.destroy();
-          rl.close();
+          void ctx.destroy().then(() => rl.close());
           return;
         }
         const msg = err instanceof Error ? err.message : String(err);
@@ -272,8 +271,7 @@ export async function startRepl(ctx: Context): Promise<void> {
     void historySession.flush().finally(() => {
       console.log('');
       console.log(dim('Goodbye.'));
-      ctx.destroy();
-      process.exit(0);
+      void ctx.destroy().then(() => process.exit(0));
     });
   });
 }

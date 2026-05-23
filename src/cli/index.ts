@@ -14,7 +14,7 @@
  */
 
 import { Command } from 'commander';
-import { readConfig, defaultDataDir } from 'nearbytes-skeleton';
+import { readConfig, emptyConfig, defaultDataDir } from 'nearbytes-skeleton';
 import { createContext } from './context.js';
 import {
   cmdSetup,
@@ -65,7 +65,7 @@ program
   .description('Start an interactive REPL (interpreter mode)')
   .action(async () => {
     const opts = program.opts<{ config?: string; dataDir: string }>();
-    const config = await readConfig(opts.config).catch(() => ({ dataDir: opts.dataDir, volumes: [] }));
+    const config = await readConfig(opts.config).catch(() => emptyConfig(opts.dataDir));
     const ctx = await createContext({ ...config, dataDir: opts.dataDir ?? config.dataDir });
     await startRepl(ctx);
   });
@@ -78,7 +78,7 @@ program
   .requiredOption('-s, --secret <secret>', 'Channel secret  e.g. "myvolume:password"')
   .action(async (opts: { secret: string }) => {
     const gopts = program.opts<{ config?: string; dataDir: string }>();
-    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(() => cmdSetup(ctx, opts.secret));
   });
@@ -93,7 +93,7 @@ volumeCmd
   .requiredOption('-s, --secret <secret>', 'Volume secret')
   .action(async (opts: { secret: string }) => {
     const gopts = program.opts<{ config?: string; dataDir: string }>();
-    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(() => cmdVolumeOpen(ctx, opts.secret, false));
   });
@@ -121,7 +121,7 @@ program
   .requiredOption('-s, --secret <secret>', 'Volume secret')
   .action(async (opts: { secret: string }) => {
     const gopts = program.opts<{ config?: string; dataDir: string }>();
-    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(() => cmdTimeline(ctx, opts.secret));
   });
@@ -138,7 +138,7 @@ fileCmd
   .option('-n, --name <name>', 'Name to store the file under (default: basename of path)')
   .action(async (opts: { path: string; secret: string; name?: string }) => {
     const gopts = program.opts<{ config?: string; dataDir: string }>();
-    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(() => cmdFileAdd(ctx, opts.path, opts.secret, opts.name));
   });
@@ -150,7 +150,7 @@ fileCmd
   .requiredOption('-s, --secret <secret>', 'Volume secret')
   .action(async (opts: { secret: string }) => {
     const gopts = program.opts<{ config?: string; dataDir: string }>();
-    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(() => cmdFileList(ctx, opts.secret));
   });
@@ -163,7 +163,7 @@ fileCmd
   .requiredOption('-o, --output <path>', 'Output file path')
   .action(async (opts: { name: string; secret: string; output: string }) => {
     const gopts = program.opts<{ config?: string; dataDir: string }>();
-    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(() => cmdFileGet(ctx, opts.name, opts.secret, opts.output));
   });
@@ -176,7 +176,7 @@ fileCmd
   .requiredOption('-s, --secret <secret>', 'Volume secret')
   .action(async (opts: { name: string; secret: string }) => {
     const gopts = program.opts<{ config?: string; dataDir: string }>();
-    const config = await readConfig(gopts.config).catch(() => ({ dataDir: gopts.dataDir, volumes: [] }));
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(() => cmdFileRemove(ctx, opts.name, opts.secret));
   });

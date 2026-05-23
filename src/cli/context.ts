@@ -5,7 +5,7 @@
 import { createFileService, type FileService } from '../fileService.js';
 import { createReactiveVolume, type ReactiveVolume } from '../reactiveVolume.js';
 import {
-  createFilesystemSkeleton,
+  createFilesystemSkeletonFromConfig,
   type NearbytesSkeleton,
   createFilesystemWatcher,
   type VolumeWatcher,
@@ -20,14 +20,14 @@ export interface Context {
   activeVolume: ReactiveVolume | null;
   readonly volumes: Map<string, ReactiveVolume>;
   readonly watchers: Map<string, VolumeWatcher>;
-  destroy(): void;
+  destroy(): Promise<void>;
 }
 
 /**
  * Creates a CLI context: filesystem log, file service, empty volume cache.
  */
 export async function createContext(config: NearbytesConfig): Promise<Context> {
-  const skeleton = await createFilesystemSkeleton(config.dataDir);
+  const skeleton = await createFilesystemSkeletonFromConfig(config);
   const fileService = createFileService({ log: skeleton.log, crypto: skeleton.crypto });
   const volumes = new Map<string, ReactiveVolume>();
   const watchers = new Map<string, VolumeWatcher>();
@@ -40,9 +40,10 @@ export async function createContext(config: NearbytesConfig): Promise<Context> {
     volumes,
     watchers,
 
-    destroy(): void {
+    async destroy(): Promise<void> {
       for (const w of watchers.values()) w.close();
       watchers.clear();
+      await skeleton.destroy();
     },
   };
 }

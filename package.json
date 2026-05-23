@@ -41,7 +41,9 @@
     "bench:sync": "node dist/scripts/sync-benchmark.js",
     "bench:sync:merge": "node scripts/merge-benchmark-results.mjs",
     "bench:sync:figures": "node scripts/render-benchmark-figures.mjs",
-    "bench:sync:remote": "bash scripts/run-sync-benchmark-remote.sh"
+    "bench:sync:remote": "bash scripts/run-sync-benchmark-remote.sh",
+    "bench:sync:quick": "NEARBYTES_BENCH_QUICK=1 node dist/scripts/sync-benchmark.js",
+    "bench:sync:remote:quick": "NEARBYTES_BENCH_QUICK=1 bash scripts/run-sync-benchmark-remote.sh"
   },
   "license": "MIT",
   "engines": {

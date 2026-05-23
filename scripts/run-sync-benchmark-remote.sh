@@ -16,6 +16,14 @@ REPOS_BASE="${NEARBYTES_REPOS:-https://github.com/nearbytes}"
 BENCH_BASE_LOCAL="${NEARBYTES_BENCH_BASE:-/tmp/nearbytes-sync-benchmark}"
 BENCH_BASE_REMOTE="${NEARBYTES_BENCH_BASE_REMOTE:-/tmp/nearbytes-sync-benchmark}"
 OUT_DIR="${NEARBYTES_BENCH_OUTDIR:-$ROOT/benchmark-output}"
+if [[ "${NEARBYTES_BENCH_QUICK:-}" == "1" || "${NEARBYTES_BENCH_QUICK:-}" == "true" ]]; then
+  export NEARBYTES_BENCH_QUICK=1
+  BENCH_RECV_DEADLINE_SEC="${BENCH_RECV_DEADLINE_SEC:-50}"
+  BENCH_COUNTDOWN_SEC="${BENCH_COUNTDOWN_SEC:-3}"
+else
+  BENCH_RECV_DEADLINE_SEC="${BENCH_RECV_DEADLINE_SEC:-600}"
+  BENCH_COUNTDOWN_SEC="${BENCH_COUNTDOWN_SEC:-12}"
+fi
 TOTAL_STEPS=7
 STEP=0
 RUN_START=$SECONDS
@@ -68,6 +76,15 @@ run_yarn install
 heartbeat "yarn build (local)"
 run_yarn build
 
+SKIP_REMOTE_BUILD=0
+if [[ "${NEARBYTES_BENCH_QUICK:-}" == "1" ]]; then
+  if ssh -o BatchMode=yes "$REMOTE_HOST" "test -f '${BENCH_BASE_REMOTE}/repos/nearbytes-files/dist/scripts/sync-benchmark.js'"; then
+    SKIP_REMOTE_BUILD=1
+    heartbeat "QUICK: skip remote build (dist already present)"
+  fi
+fi
+
+if [[ "$SKIP_REMOTE_BUILD" -eq 0 ]]; then
 progress "Pull + build receiver repos on ${REMOTE_HOST} (nearbytes-log must include 10df209)"
 REMOTE_BUILD_SCRIPT="$(mktemp)"
 trap 'rm -f "$REMOTE_BUILD_SCRIPT"' EXIT
@@ -108,6 +125,7 @@ done
 echo "ALL_BUILDS_DONE"
 REMOTE
 ssh "$REMOTE_HOST" "bash -s" < "$REMOTE_BUILD_SCRIPT" 2>&1 | stream_lines '[remote-build]'
+fi
 
 REMOTE_LOG="${BENCH_BASE_REMOTE}/bob/bench-run.log"
 REMOTE_RESULT="${BENCH_BASE_REMOTE}/bob/benchmark-result.json"
@@ -121,32 +139,30 @@ nohup env \
   NEARBYTES_BENCH_ROLE=receiver \
   NEARBYTES_BENCH_BASE="${BENCH_BASE_REMOTE}" \
   NEARBYTES_BENCH_OUT="${REMOTE_RESULT}" \
-  NEARBYTES_BENCH_DISCOVERY_MS=18000 \
-  NEARBYTES_BENCH_SWARM_TIMEOUT_MS=120000 \
-  NEARBYTES_BENCH_RECEIVE_TIMEOUT_MS=900000 \
+  NEARBYTES_BENCH_QUICK="${NEARBYTES_BENCH_QUICK:-}" \
+  NEARBYTES_BENCH_DISCOVERY_MS="${NEARBYTES_BENCH_DISCOVERY_MS:-}" \
+  NEARBYTES_BENCH_SWARM_TIMEOUT_MS="${NEARBYTES_BENCH_SWARM_TIMEOUT_MS:-}" \
+  NEARBYTES_BENCH_RECEIVE_TIMEOUT_MS="${NEARBYTES_BENCH_RECEIVE_TIMEOUT_MS:-}" \
   node dist/scripts/sync-benchmark.js >>"${REMOTE_LOG}" 2>&1 &
 echo \$! > "${BENCH_BASE_REMOTE}/bob/bench.pid"
 echo RECEIVER_DETACHED
 REMOTE
 heartbeat "receiver detached (log: ${REMOTE_LOG})"
-countdown 12 "sender start"
+countdown "$BENCH_COUNTDOWN_SEC" "sender start"
 
 progress "Start sender (alice) on this machine"
 set +e
 NEARBYTES_BENCH_ROLE=sender \
+NEARBYTES_BENCH_QUICK="${NEARBYTES_BENCH_QUICK:-}" \
 NEARBYTES_BENCH_BASE="${BENCH_BASE_LOCAL}" \
 NEARBYTES_BENCH_OUT="${BENCH_BASE_LOCAL}/alice/benchmark-result.json" \
-NEARBYTES_BENCH_DISCOVERY_MS=18000 \
-NEARBYTES_BENCH_SWARM_TIMEOUT_MS=120000 \
-NEARBYTES_BENCH_INTER_TRIAL_MS=2500 \
-NEARBYTES_BENCH_GRACE_MS=35000 \
   node "$ROOT/dist/scripts/sync-benchmark.js" 2>&1 | stream_lines '[local]'
 SENDER_EXIT=$?
 set -e
 
 progress "Wait for receiver result on ${REMOTE_HOST}"
 RECV_EXIT=0
-RECV_DEADLINE=$((SECONDS + 600))
+RECV_DEADLINE=$((SECONDS + BENCH_RECV_DEADLINE_SEC))
 until ssh -o BatchMode=yes "$REMOTE_HOST" "test -f '${REMOTE_RESULT}'"; do
   if (( SECONDS > RECV_DEADLINE )); then
     echo "Receiver timed out after 600s — last log lines:"

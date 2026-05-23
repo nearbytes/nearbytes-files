@@ -112,6 +112,9 @@ async function main() {
         await waitForPeerFile(ctx, peerFile, timeoutMs);
         const names = await listFilenames(ctx);
         console.log(`[${role}] ✓ bidirectional sync OK — files: ${names.join(', ')}`);
+        const graceMs = Number(process.env['NEARBYTES_TEST_GRACE_MS'] ?? '30000');
+        console.log(`[${role}] holding session ${graceMs}ms for peer to finish pull…`);
+        await new Promise((r) => setTimeout(r, graceMs));
         process.exitCode = 0;
     }
     finally {

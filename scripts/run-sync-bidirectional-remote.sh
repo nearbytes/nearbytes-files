@@ -7,14 +7,21 @@ REMOTE_HOST="${NEARBYTES_REMOTE_HOST:-pc-ciancia}"
 REMOTE_DIR="${NEARBYTES_REMOTE_DIR:-~/nearbytes-sync-test}"
 REPOS_BASE="${NEARBYTES_REPOS:-https://github.com/nearbytes}"
 
-YARN="npx -y yarn@4.6.0"
+run_yarn() {
+  if command -v yarn >/dev/null 2>&1; then
+    yarn "$@"
+  else
+    corepack prepare yarn@4.5.1 --activate
+    yarn "$@"
+  fi
+}
 
 build_repo() {
   local dir="$1"
   cd "$dir"
   if [[ -f yarn.lock ]]; then
-    $YARN install
-    $YARN build
+    run_yarn install
+    run_yarn build
   else
     npm install --no-fund --no-audit
     npm run build
@@ -35,21 +42,30 @@ clone_deps() {
 
 echo "==> Local build (alice)"
 cd "$ROOT"
-$YARN install
-$YARN build
+run_yarn install
+run_yarn build
 
 echo "==> Remote setup (bob) on $REMOTE_HOST"
 ssh "$REMOTE_HOST" "bash -s" <<REMOTE
 set -euo pipefail
 REMOTE_DIR="${REMOTE_DIR}"
 REPOS_BASE="${REPOS_BASE}"
-YARN="npx -y yarn@4.6.0"
+run_yarn() {
+  if command -v yarn >/dev/null 2>&1; then
+    yarn "\$@"
+  else
+    export COREPACK_HOME="\$REMOTE_DIR/.corepack"
+    mkdir -p "\$COREPACK_HOME"
+    corepack prepare yarn@4.5.1 --activate
+    yarn "\$@"
+  fi
+}
 build_repo() {
   local dir="\$1"
   cd "\$dir"
   if [[ -f yarn.lock ]]; then
-    \$YARN install
-    \$YARN build
+    run_yarn install
+    run_yarn build
   else
     npm install --no-fund --no-audit
     npm run build

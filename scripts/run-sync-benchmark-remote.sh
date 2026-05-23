@@ -41,15 +41,9 @@ countdown() {
   done
 }
 
-wait_pid_with_heartbeat() {
-  local pid=$1
-  local label=$2
-  local t0=$SECONDS
-  while kill -0 "$pid" 2>/dev/null; do
-    heartbeat "${label} — still running ($((SECONDS - t0))s elapsed)"
-    sleep 5
-  done
-  wait "$pid"
+poll_remote_log() {
+  local log_path=$1
+  ssh -o BatchMode=yes "$REMOTE_HOST" "tail -n 8 '${log_path}' 2>/dev/null" 2>/dev/null | stream_lines '[remote]' || true
 }
 
 run_yarn() {
@@ -115,17 +109,26 @@ echo "ALL_BUILDS_DONE"
 REMOTE
 ssh "$REMOTE_HOST" "bash -s" < "$REMOTE_BUILD_SCRIPT" 2>&1 | stream_lines '[remote-build]'
 
-progress "Start receiver (bob) on ${REMOTE_HOST}"
-ssh "$REMOTE_HOST" "cd ${BENCH_BASE_REMOTE}/repos/nearbytes-files && \
+REMOTE_LOG="${BENCH_BASE_REMOTE}/bob/bench-run.log"
+REMOTE_RESULT="${BENCH_BASE_REMOTE}/bob/benchmark-result.json"
+
+progress "Start receiver (bob) on ${REMOTE_HOST} (detached — no blocking SSH pipe)"
+ssh -o BatchMode=yes "$REMOTE_HOST" bash -s <<REMOTE
+set -euo pipefail
+cd "${BENCH_BASE_REMOTE}/repos/nearbytes-files"
+: > "${REMOTE_LOG}"
+nohup env \
   NEARBYTES_BENCH_ROLE=receiver \
-  NEARBYTES_BENCH_BASE=${BENCH_BASE_REMOTE} \
-  NEARBYTES_BENCH_OUT=${BENCH_BASE_REMOTE}/bob/benchmark-result.json \
+  NEARBYTES_BENCH_BASE="${BENCH_BASE_REMOTE}" \
+  NEARBYTES_BENCH_OUT="${REMOTE_RESULT}" \
   NEARBYTES_BENCH_DISCOVERY_MS=18000 \
   NEARBYTES_BENCH_SWARM_TIMEOUT_MS=120000 \
   NEARBYTES_BENCH_RECEIVE_TIMEOUT_MS=900000 \
-  node dist/scripts/sync-benchmark.js" 2>&1 | stream_lines '[remote]' &
-RECV_PID=$!
-heartbeat "receiver PID ${RECV_PID}"
+  node dist/scripts/sync-benchmark.js >>"${REMOTE_LOG}" 2>&1 &
+echo \$! > "${BENCH_BASE_REMOTE}/bob/bench.pid"
+echo RECEIVER_DETACHED
+REMOTE
+heartbeat "receiver detached (log: ${REMOTE_LOG})"
 countdown 12 "sender start"
 
 progress "Start sender (alice) on this machine"
@@ -141,21 +144,27 @@ NEARBYTES_BENCH_GRACE_MS=35000 \
 SENDER_EXIT=$?
 set -e
 
-progress "Wait for receiver result file on ${REMOTE_HOST}"
+progress "Wait for receiver result on ${REMOTE_HOST}"
 RECV_EXIT=0
-RECV_RESULT_REMOTE="${BENCH_BASE_REMOTE}/bob/benchmark-result.json"
-until ssh -o BatchMode=yes "$REMOTE_HOST" "test -f '${RECV_RESULT_REMOTE}'"; do
-  heartbeat "receiver — waiting for ${RECV_RESULT_REMOTE}"
+RECV_DEADLINE=$((SECONDS + 600))
+until ssh -o BatchMode=yes "$REMOTE_HOST" "test -f '${REMOTE_RESULT}'"; do
+  if (( SECONDS > RECV_DEADLINE )); then
+    echo "Receiver timed out after 600s — last log lines:"
+    poll_remote_log "$REMOTE_LOG"
+    RECV_EXIT=1
+    break
+  fi
+  heartbeat "receiver — polling log + waiting for result"
+  poll_remote_log "$REMOTE_LOG"
   sleep 5
 done
-heartbeat "receiver result file present — closing SSH stream"
-kill "$RECV_PID" 2>/dev/null || true
-wait "$RECV_PID" 2>/dev/null || true
+ssh -o BatchMode=yes "$REMOTE_HOST" 'pkill -f "node dist/scripts/sync-benchmark" 2>/dev/null || true'
+poll_remote_log "$REMOTE_LOG"
 
 progress "Fetch receiver JSON + merge results"
 mkdir -p "$OUT_DIR"
 heartbeat "scp receiver-result.json"
-scp "${REMOTE_HOST}:${BENCH_BASE_REMOTE}/bob/benchmark-result.json" "$OUT_DIR/receiver-result.json"
+scp "${REMOTE_HOST}:${REMOTE_RESULT}" "$OUT_DIR/receiver-result.json"
 
 SENDER_JSON="${BENCH_BASE_LOCAL}/alice/benchmark-result.json"
 MANIFEST_JSON="${BENCH_BASE_LOCAL}/alice/trial-manifest.json"

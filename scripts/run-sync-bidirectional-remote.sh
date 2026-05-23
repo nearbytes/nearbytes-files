@@ -7,7 +7,7 @@ REMOTE_HOST="${NEARBYTES_REMOTE_HOST:-pc-ciancia}"
 REMOTE_DIR="${NEARBYTES_REMOTE_DIR:-~/nearbytes-sync-test}"
 REPOS_BASE="${NEARBYTES_REPOS:-https://github.com/nearbytes}"
 
-YARN="npx -y yarn@4.10.3"
+YARN="npx -y yarn@4.6.0"
 
 build_repo() {
   local dir="$1"
@@ -43,7 +43,7 @@ ssh "$REMOTE_HOST" "bash -s" <<REMOTE
 set -euo pipefail
 REMOTE_DIR="${REMOTE_DIR}"
 REPOS_BASE="${REPOS_BASE}"
-YARN="npx -y yarn@4.10.3"
+YARN="npx -y yarn@4.6.0"
 build_repo() {
   local dir="\$1"
   cd "\$dir"

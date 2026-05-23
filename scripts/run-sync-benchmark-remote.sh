@@ -75,7 +75,9 @@ heartbeat "yarn build (local)"
 run_yarn build
 
 progress "Pull + build receiver repos on ${REMOTE_HOST} (nearbytes-log must include 10df209)"
-ssh "$REMOTE_HOST" "bash -s" 2>&1 | stream_lines '[remote-build]' <<REMOTE
+REMOTE_BUILD_SCRIPT="$(mktemp)"
+trap 'rm -f "$REMOTE_BUILD_SCRIPT"' EXIT
+cat > "$REMOTE_BUILD_SCRIPT" <<REMOTE
 set -euo pipefail
 REPOS_BASE="${REPOS_BASE}"
 BENCH_BASE="${BENCH_BASE_REMOTE}"
@@ -111,6 +113,7 @@ for repo in nearbytes-crypto nearbytes-log nearbytes-sync nearbytes-skeleton nea
 done
 echo "ALL_BUILDS_DONE"
 REMOTE
+ssh "$REMOTE_HOST" "bash -s" < "$REMOTE_BUILD_SCRIPT" 2>&1 | stream_lines '[remote-build]'
 
 progress "Start receiver (bob) on ${REMOTE_HOST}"
 ssh "$REMOTE_HOST" "cd ${BENCH_BASE_REMOTE}/repos/nearbytes-files && \
@@ -138,8 +141,16 @@ NEARBYTES_BENCH_GRACE_MS=35000 \
 SENDER_EXIT=$?
 set -e
 
-progress "Wait for receiver to finish"
-if wait_pid_with_heartbeat "$RECV_PID" "receiver (bob)"; then RECV_EXIT=0; else RECV_EXIT=$?; fi
+progress "Wait for receiver result file on ${REMOTE_HOST}"
+RECV_EXIT=0
+RECV_RESULT_REMOTE="${BENCH_BASE_REMOTE}/bob/benchmark-result.json"
+until ssh -o BatchMode=yes "$REMOTE_HOST" "test -f '${RECV_RESULT_REMOTE}'"; do
+  heartbeat "receiver — waiting for ${RECV_RESULT_REMOTE}"
+  sleep 5
+done
+heartbeat "receiver result file present — closing SSH stream"
+kill "$RECV_PID" 2>/dev/null || true
+wait "$RECV_PID" 2>/dev/null || true
 
 progress "Fetch receiver JSON + merge results"
 mkdir -p "$OUT_DIR"

@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REMOTE_HOST="${NEARBYTES_REMOTE_HOST:-pc-ciancia}"
-REMOTE_DIR="${NEARBYTES_REMOTE_DIR:-~/nearbytes-sync-test}"
+REMOTE_DIR="${NEARBYTES_REMOTE_DIR:-$HOME/nearbytes-sync-test}"
 REPOS_BASE="${NEARBYTES_REPOS:-https://github.com/nearbytes}"
 
 run_yarn() {
@@ -86,7 +86,7 @@ done
 REMOTE
 
 echo "==> Starting bob on $REMOTE_HOST (background)"
-ssh "$REMOTE_HOST" "cd ${REMOTE_DIR}/nearbytes-files && NEARBYTES_TEST_ROLE=bob NEARBYTES_TEST_TIMEOUT_MS=240000 node dist/scripts/sync-bidirectional-test.js" &
+ssh "$REMOTE_HOST" "cd \"${REMOTE_DIR}/nearbytes-files\" && NEARBYTES_TEST_ROLE=bob NEARBYTES_TEST_TIMEOUT_MS=240000 node dist/scripts/sync-bidirectional-test.js" &
 BOB_PID=$!
 sleep 8
 

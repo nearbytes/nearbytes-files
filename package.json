@@ -37,7 +37,11 @@
     "repl": "node dist/cli/index.js repl",
     "test:sync-bidirectional": "node dist/scripts/sync-bidirectional-test.js",
     "test:sync-bidirectional:local": "node scripts/run-sync-bidirectional-local.mjs",
-    "test:sync-bidirectional:remote": "bash scripts/run-sync-bidirectional-remote.sh"
+    "test:sync-bidirectional:remote": "bash scripts/run-sync-bidirectional-remote.sh",
+    "bench:sync": "node dist/scripts/sync-benchmark.js",
+    "bench:sync:merge": "node scripts/merge-benchmark-results.mjs",
+    "bench:sync:figures": "node scripts/render-benchmark-figures.mjs",
+    "bench:sync:remote": "bash scripts/run-sync-benchmark-remote.sh"
   },
   "license": "MIT",
   "engines": {

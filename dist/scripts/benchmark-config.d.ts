@@ -30,7 +30,10 @@ export interface BenchProfile {
     readonly interTrialMs: number;
     readonly graceMs: number;
     readonly swarmTimeoutMs: number;
-    readonly receiveTimeoutMs: number;
+    /** Max wait for latency payloads (receiver). */
+    readonly latencyReceiveTimeoutMs: number;
+    /** Max wait for throughput stream/batch after latency (receiver). */
+    readonly throughputReceiveTimeoutMs: number;
 }
 /** Empty string env (from `VAR= cmd`) must not become 0 via Number(''). */
 export declare function benchEnvMs(key: string, fallback: number): number;

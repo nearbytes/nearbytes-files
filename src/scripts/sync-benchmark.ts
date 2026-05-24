@@ -15,7 +15,10 @@ import {
   benchRoleFromEnv,
   benchWorkDir,
   createBenchContext,
+  formatBenchBytes,
+  goodputFromInboundMarkers,
   hrtimeMs,
+  inboundStreamProgress,
   listBenchFilenames,
   makePayload,
   publishProfile,
@@ -272,11 +275,11 @@ async function runReceiver(
   const receivedAt = new Map<string, { wallMs: number; cpuMs: number }>();
   const latency: LatencyResult[] = [];
 
-  const deadline = Date.now() + profile.receiveTimeoutMs;
+  const latencyDeadline = Date.now() + profile.latencyReceiveTimeoutMs;
   benchProgress('receiver', `phase 3/4 — waiting for ${expectedLatencyTrials} latency payloads…`);
 
   let lastBeat = Date.now();
-  while (Date.now() < deadline) {
+  while (Date.now() < latencyDeadline) {
     await openAndWatch(ctx, BENCH_CREDENTIALS.volume, true);
     const names = await listBenchFilenames(ctx);
     for (const name of names) {
@@ -285,7 +288,7 @@ async function runReceiver(
       }
     }
     if (Date.now() - lastBeat >= 2000) {
-      const leftSec = Math.ceil((deadline - Date.now()) / 1000);
+      const leftSec = Math.ceil((latencyDeadline - Date.now()) / 1000);
       benchProgress(
         'receiver',
         `latency wait… ${receivedAt.size} artifacts, ${leftSec}s left`,
@@ -336,42 +339,83 @@ async function runReceiver(
           `bench-tp-${profile.throughputFileBytes}-${i}.bin`,
         );
 
+  const nominalBytes =
+    profile.throughputMode === 'stream'
+      ? streamBytes
+      : profile.throughputFileBytes * profile.throughputFileCount;
+  const minTpBlockBytes =
+    profile.throughputMode === 'stream'
+      ? Math.max(1024 * 1024, Math.floor(streamBytes / 32))
+      : Math.max(4096, Math.floor(profile.throughputFileBytes / 4));
+
   benchProgress(
     'receiver',
     profile.throughputMode === 'stream'
-      ? `phase 4/4 — waiting for ${streamBytes} B stream…`
+      ? `phase 4/4 — waiting for ${formatBenchBytes(streamBytes)} stream (inbound markers + listFiles)…`
       : 'phase 4/4 — waiting for throughput batch…',
   );
+
+  const tpStartWall = Date.now();
+  const tpDeadline = Date.now() + profile.throughputReceiveTimeoutMs;
   lastBeat = Date.now();
-  while (Date.now() < deadline) {
+  let streamDone = false;
+
+  while (Date.now() < tpDeadline && !streamDone) {
     await openAndWatch(ctx, BENCH_CREDENTIALS.volume, true);
     const names = await listBenchFilenames(ctx);
     for (const name of names) {
       if (!receivedAt.has(name)) {
         receivedAt.set(name, { wallMs: Date.now(), cpuMs: hrtimeMs() });
         if (name.startsWith('bench-tp')) {
-          benchProgress('receiver', `saw ${name}`);
+          benchProgress('receiver', `listFiles saw ${name}`);
         }
       }
     }
+
+    const activityLog = await readActivityRaw(ctx.config.dataDir);
+    const inbound = inboundStreamProgress(activityLog, tpStartWall, minTpBlockBytes);
+    const tpSeen = tpNames.filter((n) => receivedAt.has(n)).length;
+    const hasComplete = receivedAt.has('bench-phase-throughput-complete.txt');
+
     if (Date.now() - lastBeat >= 5000) {
-      const tpSeen = tpNames.filter((n) => receivedAt.has(n)).length;
-      benchProgress('receiver', `throughput wait… ${tpSeen}/${tpNames.length} files`);
+      const leftSec = Math.ceil((tpDeadline - Date.now()) / 1000);
+      benchProgress(
+        'receiver',
+        `throughput: ${formatBenchBytes(inbound.bytes)} inbound (${inbound.chunks} chunks), listFiles ${tpSeen}/${tpNames.length}, complete=${hasComplete ? 'yes' : 'no'}, ${leftSec}s left`,
+      );
       lastBeat = Date.now();
     }
-    if (receivedAt.has('bench-phase-throughput-complete.txt')) {
+
+    if (hasComplete) {
+      streamDone = true;
       break;
     }
+    if (profile.throughputMode === 'stream' && inbound.bytes >= streamBytes * 0.95) {
+      benchProgress(
+        'receiver',
+        `stream inbound ${formatBenchBytes(inbound.bytes)} (≥95% of ${formatBenchBytes(streamBytes)})`,
+      );
+      streamDone = true;
+      break;
+    }
+    if (tpNames.every((n) => receivedAt.has(n)) && inbound.bytes > 0) {
+      streamDone = true;
+      break;
+    }
+
     await sleep(profile.receiverPollMs);
   }
 
-  const nominalBytes =
-    profile.throughputMode === 'stream'
-      ? streamBytes
-      : profile.throughputFileBytes * profile.throughputFileCount;
+  const activityLog = await readActivityRaw(ctx.config.dataDir);
+  const inboundGoodput = goodputFromInboundMarkers(
+    activityLog,
+    nominalBytes,
+    [],
+    tpStartWall,
+  );
 
   let throughput: BenchmarkResult['throughput'] = null;
-  if (tpNames.every((n) => receivedAt.has(n))) {
+  if (streamDone || inboundGoodput !== null) {
     throughput = {
       mode: profile.throughputMode,
       fileCount: profile.throughputMode === 'stream' ? 1 : profile.throughputFileCount,
@@ -379,8 +423,20 @@ async function runReceiver(
         profile.throughputMode === 'stream' ? streamBytes : profile.throughputFileBytes,
       publishStartMs: 0,
       publishEndMs: 0,
+      goodputMbps: inboundGoodput?.goodputMbps,
+      inboundDurationMs: inboundGoodput?.durationMs,
+      bytesReceived: inboundGoodput?.bytesReceived,
     };
-    benchProgress('receiver', `throughput files complete (${nominalBytes} B nominal); goodput at merge`);
+    if (inboundGoodput !== null) {
+      benchProgress(
+        'receiver',
+        `throughput done — goodput ≈ ${inboundGoodput.goodputMbps.toFixed(1)} Mb/s (${inboundGoodput.durationMs}ms span, ${formatBenchBytes(inboundGoodput.bytesReceived)} received)`,
+      );
+    } else {
+      benchProgress('receiver', `throughput phase ended (listFiles/complete marker); goodput at merge`);
+    }
+  } else {
+    benchProgress('receiver', 'throughput phase timed out');
   }
 
   return { latency, throughput };

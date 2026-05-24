@@ -74,12 +74,11 @@ export function parseBenchActivityLines(activityLog) {
 }
 
 /** Goodput from receiver inbound-stored blocks after sender throughput-phase-start. */
-export function goodputFromInboundMarkers(receiverLog, payloadBytes, senderLog = []) {
+export function goodputFromInboundMarkers(receiverLog, payloadBytes, senderLog = [], sinceWallMs) {
   const phaseEvents = parseBenchActivityLines(senderLog.length ? senderLog : receiverLog);
   const start = phaseEvents.find((e) => e.bench === 'throughput-phase-start');
-  if (!start) return null;
-
-  const t0 = start.t;
+  const t0 = start?.t ?? sinceWallMs;
+  if (t0 === undefined) return null;
   const minBlockBytes =
     payloadBytes > 16 * 1024 * 1024
       ? 1024 * 1024

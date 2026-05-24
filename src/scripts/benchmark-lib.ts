@@ -241,10 +241,33 @@ export function parseBenchActivityLines(activityLog: readonly string[]): BenchAc
 }
 
 /** Goodput from first-to-last inbound-stored block between throughput phase markers. */
+export function inboundStreamProgress(
+  receiverLog: readonly string[],
+  sinceWallMs: number,
+  minBlockBytes: number,
+): { readonly bytes: number; readonly chunks: number } {
+  const blocks = parseBenchActivityLines(receiverLog).filter(
+    (e) =>
+      e.bench === 'inbound-stored' &&
+      e.kind === 'block' &&
+      e.t >= sinceWallMs &&
+      Number(e.bytes) >= minBlockBytes,
+  );
+  const bytes = blocks.reduce((s, b) => s + (Number(b.bytes) || 0), 0);
+  return { bytes, chunks: blocks.length };
+}
+
+export function formatBenchBytes(n: number): string {
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KiB`;
+  return `${n} B`;
+}
+
 export function goodputFromInboundMarkers(
   receiverLog: readonly string[],
   nominalBytes: number,
   senderLog: readonly string[] = [],
+  sinceWallMs?: number,
 ): {
   readonly goodputMbps: number;
   readonly durationMs: number;
@@ -252,8 +275,8 @@ export function goodputFromInboundMarkers(
 } | null {
   const phaseEvents = parseBenchActivityLines(senderLog.length > 0 ? senderLog : receiverLog);
   const start = phaseEvents.find((e) => e.bench === 'throughput-phase-start');
-  if (!start) return null;
-  const t0 = start.t;
+  const t0 = start?.t ?? sinceWallMs;
+  if (t0 === undefined) return null;
   const minBlockBytes =
     nominalBytes > 16 * 1024 * 1024
       ? 1024 * 1024

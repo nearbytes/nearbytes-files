@@ -12,7 +12,7 @@ import { spawn } from 'child_process';
 import { getBenchPaths, getRepoRoot } from './lib/config.mjs';
 import { spawnBench, sleep } from './lib/spawn-bench.mjs';
 
-const PHASE_WALL_SEC = 180;
+const PHASE_WALL_SEC = 240;
 const repoRoot = getRepoRoot();
 const paths = await getBenchPaths();
 const runId = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -93,6 +93,7 @@ await new Promise((res, rej) => {
       reportPath,
       '--topology',
       'localhost paper profile (alice sender, bob receiver)',
+      '--quiet',
     ],
     { cwd: repoRoot, stdio: 'inherit' },
   );

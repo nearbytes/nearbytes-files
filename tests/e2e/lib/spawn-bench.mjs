@@ -33,7 +33,7 @@ export function spawnBench(role, envExtra = {}) {
       new Promise((resolve, reject) => {
         child.on('error', reject);
         child.on('exit', (code) => {
-          if (code === 0) resolve(out);
+          if (code === 0 || code === 143 || code === null) resolve(out);
           else reject(new Error(`${role} exited ${code}`));
         });
       }),

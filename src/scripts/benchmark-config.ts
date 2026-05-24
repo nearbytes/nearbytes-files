@@ -32,7 +32,10 @@ export interface BenchProfile {
   readonly interTrialMs: number;
   readonly graceMs: number;
   readonly swarmTimeoutMs: number;
-  readonly receiveTimeoutMs: number;
+  /** Max wait for latency payloads (receiver). */
+  readonly latencyReceiveTimeoutMs: number;
+  /** Max wait for throughput stream/batch after latency (receiver). */
+  readonly throughputReceiveTimeoutMs: number;
 }
 
 const FULL_PAYLOAD_SIZES = [
@@ -102,7 +105,8 @@ export function getBenchProfile(): BenchProfile {
       interTrialMs: benchEnvMs('NEARBYTES_BENCH_INTER_TRIAL_MS', 0),
       graceMs: benchEnvMs('NEARBYTES_BENCH_GRACE_MS', 1500),
       swarmTimeoutMs: benchEnvMs('NEARBYTES_BENCH_SWARM_TIMEOUT_MS', 12000),
-      receiveTimeoutMs: benchEnvMs('NEARBYTES_BENCH_RECEIVE_TIMEOUT_MS', 25000),
+      latencyReceiveTimeoutMs: benchEnvMs('NEARBYTES_BENCH_LATENCY_TIMEOUT_MS', 25000),
+      throughputReceiveTimeoutMs: 0,
       receiverPollMs: benchEnvMs('NEARBYTES_BENCH_RECEIVER_POLL_MS', 50),
     };
   }
@@ -126,7 +130,8 @@ export function getBenchProfile(): BenchProfile {
       interTrialMs: benchEnvMs('NEARBYTES_BENCH_INTER_TRIAL_MS', 50),
       graceMs: benchEnvMs('NEARBYTES_BENCH_GRACE_MS', 5000),
       swarmTimeoutMs: benchEnvMs('NEARBYTES_BENCH_SWARM_TIMEOUT_MS', 30000),
-      receiveTimeoutMs: benchEnvMs('NEARBYTES_BENCH_RECEIVE_TIMEOUT_MS', 600000),
+      latencyReceiveTimeoutMs: benchEnvMs('NEARBYTES_BENCH_LATENCY_TIMEOUT_MS', 120000),
+      throughputReceiveTimeoutMs: benchEnvMs('NEARBYTES_BENCH_THROUGHPUT_TIMEOUT_MS', 180000),
       receiverPollMs: benchEnvMs('NEARBYTES_BENCH_RECEIVER_POLL_MS', 50),
     };
   }
@@ -147,7 +152,8 @@ export function getBenchProfile(): BenchProfile {
       interTrialMs: benchEnvMs('NEARBYTES_BENCH_INTER_TRIAL_MS', 200),
       graceMs: benchEnvMs('NEARBYTES_BENCH_GRACE_MS', 4000),
       swarmTimeoutMs: benchEnvMs('NEARBYTES_BENCH_SWARM_TIMEOUT_MS', 15000),
-      receiveTimeoutMs: benchEnvMs('NEARBYTES_BENCH_RECEIVE_TIMEOUT_MS', 45000),
+      latencyReceiveTimeoutMs: benchEnvMs('NEARBYTES_BENCH_LATENCY_TIMEOUT_MS', 45000),
+      throughputReceiveTimeoutMs: benchEnvMs('NEARBYTES_BENCH_THROUGHPUT_TIMEOUT_MS', 60000),
       receiverPollMs: 250,
     };
   }
@@ -168,6 +174,7 @@ export function getBenchProfile(): BenchProfile {
     interTrialMs: benchEnvMs('NEARBYTES_BENCH_INTER_TRIAL_MS', 2500),
     graceMs: benchEnvMs('NEARBYTES_BENCH_GRACE_MS', 35000),
     swarmTimeoutMs: benchEnvMs('NEARBYTES_BENCH_SWARM_TIMEOUT_MS', 120000),
-    receiveTimeoutMs: benchEnvMs('NEARBYTES_BENCH_RECEIVE_TIMEOUT_MS', 900000),
+    latencyReceiveTimeoutMs: benchEnvMs('NEARBYTES_BENCH_LATENCY_TIMEOUT_MS', 600000),
+    throughputReceiveTimeoutMs: benchEnvMs('NEARBYTES_BENCH_THROUGHPUT_TIMEOUT_MS', 300000),
   };
 }

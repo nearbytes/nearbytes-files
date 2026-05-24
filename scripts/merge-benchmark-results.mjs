@@ -215,4 +215,18 @@ const report = {
 
 await mkdir(path.dirname(outPath), { recursive: true });
 await writeFile(outPath, JSON.stringify(report, null, 2));
-console.log(JSON.stringify(report, null, 2));
+
+const quiet = process.argv.includes('--quiet') || process.env['NEARBYTES_BENCH_MERGE_QUIET'] === '1';
+if (quiet) {
+  console.log(`Wrote ${outPath}`);
+  console.log(
+    JSON.stringify({
+      profile: report.profile,
+      latencyTable: report.latencyTable,
+      throughput: report.throughput,
+      swarmFormation: report.swarmFormation,
+    }),
+  );
+} else {
+  console.log(JSON.stringify(report, null, 2));
+}

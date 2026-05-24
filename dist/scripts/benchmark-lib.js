@@ -159,12 +159,27 @@ export function parseBenchActivityLines(activityLog) {
     return events.sort((a, b) => a.t - b.t);
 }
 /** Goodput from first-to-last inbound-stored block between throughput phase markers. */
-export function goodputFromInboundMarkers(receiverLog, nominalBytes, senderLog = []) {
+export function inboundStreamProgress(receiverLog, sinceWallMs, minBlockBytes) {
+    const blocks = parseBenchActivityLines(receiverLog).filter((e) => e.bench === 'inbound-stored' &&
+        e.kind === 'block' &&
+        e.t >= sinceWallMs &&
+        Number(e.bytes) >= minBlockBytes);
+    const bytes = blocks.reduce((s, b) => s + (Number(b.bytes) || 0), 0);
+    return { bytes, chunks: blocks.length };
+}
+export function formatBenchBytes(n) {
+    if (n >= 1024 * 1024)
+        return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
+    if (n >= 1024)
+        return `${(n / 1024).toFixed(0)} KiB`;
+    return `${n} B`;
+}
+export function goodputFromInboundMarkers(receiverLog, nominalBytes, senderLog = [], sinceWallMs) {
     const phaseEvents = parseBenchActivityLines(senderLog.length > 0 ? senderLog : receiverLog);
     const start = phaseEvents.find((e) => e.bench === 'throughput-phase-start');
-    if (!start)
+    const t0 = start?.t ?? sinceWallMs;
+    if (t0 === undefined)
         return null;
-    const t0 = start.t;
     const minBlockBytes = nominalBytes > 16 * 1024 * 1024
         ? 1024 * 1024
         : nominalBytes > 0

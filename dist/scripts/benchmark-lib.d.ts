@@ -56,7 +56,12 @@ export interface BenchActivityEvent {
 }
 export declare function parseBenchActivityLines(activityLog: readonly string[]): BenchActivityEvent[];
 /** Goodput from first-to-last inbound-stored block between throughput phase markers. */
-export declare function goodputFromInboundMarkers(receiverLog: readonly string[], nominalBytes: number, senderLog?: readonly string[]): {
+export declare function inboundStreamProgress(receiverLog: readonly string[], sinceWallMs: number, minBlockBytes: number): {
+    readonly bytes: number;
+    readonly chunks: number;
+};
+export declare function formatBenchBytes(n: number): string;
+export declare function goodputFromInboundMarkers(receiverLog: readonly string[], nominalBytes: number, senderLog?: readonly string[], sinceWallMs?: number): {
     readonly goodputMbps: number;
     readonly durationMs: number;
     readonly bytesReceived: number;

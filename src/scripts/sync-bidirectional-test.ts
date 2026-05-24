@@ -1,31 +1,28 @@
 /**
- * Bidirectional friend sync integration test.
- *
- * Well-known NearBytes-themed credentials (test only). Two roles share one volume
- * secret; each peer publishes a distinct file and waits for the other's file.
+ * Bidirectional friend-sync integration test.
  *
  *   NEARBYTES_TEST_ROLE=alice|bob  node dist/scripts/sync-bidirectional-test.js
  *
- * Optional: NEARBYTES_CONFIG, NEARBYTES_STORAGE_DIR (set by runner), NEARBYTES_TEST_TIMEOUT_MS (default 180000).
+ * Fast local defaults (~10s wall with e2e runner): 1 MiB payload, 50ms poll, 8s receive timeout.
  */
 
-import { mkdir, writeFile, rm } from 'fs/promises';
+import { mkdir, rm, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import os from 'os';
-import { createCryptoOperations, createSecret, bytesToHex } from 'nearbytes-crypto';
+import { createCryptoOperations, createSecret, bytesToHex, computeHash } from 'nearbytes-crypto';
 import { writeConfig, type NearbytesConfig } from 'nearbytes-skeleton';
+import type { Log } from 'nearbytes-log';
 import { createContext, openAndWatch } from '../cli/context.js';
+import { readBenchMarkers, type RunPhaseTiming } from './benchmark-lib.js';
 
 /** Public test identities — do not use in production. */
 export const TEST_CREDENTIALS = {
   profileAlice: 'nearbytes-alice:beautiful-document',
   profileBob: 'nearbytes-bob:beautiful-document',
   volume: 'nearbytes-test:beautiful-document',
-  fileAlice: 'the-nearbytes-ledger-alice.txt',
-  fileBob: 'the-nearbytes-ledger-bob.txt',
-  payloadAlice: 'NearBytes — Alice wrote this line.\n',
-  payloadBob: 'NearBytes — Bob wrote this line.\n',
+  fileAlice: 'the-nearbytes-ledger-alice.bin',
+  fileBob: 'the-nearbytes-ledger-bob.bin',
 } as const;
 
 type Role = 'alice' | 'bob';
@@ -34,6 +31,26 @@ function roleFromEnv(): Role {
   const raw = process.env['NEARBYTES_TEST_ROLE']?.toLowerCase();
   if (raw === 'alice' || raw === 'bob') return raw;
   throw new Error('Set NEARBYTES_TEST_ROLE=alice or NEARBYTES_TEST_ROLE=bob');
+}
+
+function envMs(key: string, fallback: number): number {
+  const raw = process.env[key];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function testPayloadBytes(): number {
+  return envMs('NEARBYTES_TEST_PAYLOAD_BYTES', 1024 * 1024);
+}
+
+export function makeTestPayload(sizeBytes: number, role: Role): Buffer {
+  const buf = Buffer.alloc(sizeBytes);
+  const seed = role === 'alice' ? 0xa1 : 0xb0;
+  for (let i = 0; i < sizeBytes; i++) {
+    buf[i] = (i * 17 + seed) & 0xff;
+  }
+  return buf;
 }
 
 async function profilePublicKeyHex(secret: string): Promise<string> {
@@ -88,70 +105,143 @@ async function listFilenames(ctx: Awaited<ReturnType<typeof createContext>>): Pr
   return files.map((f) => f.filename);
 }
 
+async function waitForFriendSession(log: Log, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const markers = await readBenchMarkers(log);
+    if (markers.some((m) => m.event === 'friend-session-attached')) {
+      return;
+    }
+    await sleep(100);
+  }
+  throw new Error(`No friend sync session within ${timeoutMs}ms`);
+}
+
 async function waitForPeerFile(
   ctx: Awaited<ReturnType<typeof createContext>>,
   peerFile: string,
+  expectedBytes: number,
   timeoutMs: number,
-): Promise<void> {
+): Promise<{ blobHash: string; wallMs: number }> {
   const start = Date.now();
+  const pollMs = envMs('NEARBYTES_TEST_POLL_MS', 50);
   while (Date.now() - start < timeoutMs) {
     await openAndWatch(ctx, TEST_CREDENTIALS.volume, true);
-    const names = await listFilenames(ctx);
-    if (names.includes(peerFile)) return;
-    await new Promise((r) => setTimeout(r, 2000));
+    const files = await ctx.fileService.listFiles(TEST_CREDENTIALS.volume);
+    const hit = files.find((f) => f.filename === peerFile);
+    if (hit !== undefined) {
+      const data = await ctx.fileService.getFile(TEST_CREDENTIALS.volume, hit.blobHash);
+      if (data.length === expectedBytes) {
+        return { blobHash: hit.blobHash, wallMs: Date.now() - start };
+      }
+    }
+    await sleep(pollMs);
   }
   const final = await listFilenames(ctx);
   throw new Error(
-    `Timed out waiting for peer file "${peerFile}" (have: ${final.join(', ') || '(none)'})`,
+    `Timed out waiting for "${peerFile}" (${expectedBytes} B) — have: ${final.join(', ') || '(none)'}`,
   );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 async function main(): Promise<void> {
   const role = roleFromEnv();
-  const timeoutMs = Number(process.env['NEARBYTES_TEST_TIMEOUT_MS'] ?? '180000');
+  const payloadBytes = testPayloadBytes();
+  const payload = makeTestPayload(payloadBytes, role);
+  const payloadHash = await computeHash(payload);
+
   const peerFile = role === 'alice' ? TEST_CREDENTIALS.fileBob : TEST_CREDENTIALS.fileAlice;
   const ownFile = role === 'alice' ? TEST_CREDENTIALS.fileAlice : TEST_CREDENTIALS.fileBob;
-  const ownPayload =
-    role === 'alice' ? TEST_CREDENTIALS.payloadAlice : TEST_CREDENTIALS.payloadBob;
+
+  const peerWaitMs = envMs('NEARBYTES_TEST_PEER_WAIT_MS', 6000);
+  const receiveTimeoutMs = envMs('NEARBYTES_TEST_TIMEOUT_MS', 8000);
+  const graceMs = envMs('NEARBYTES_TEST_GRACE_MS', 500);
+  const warmupMs = envMs('NEARBYTES_TEST_WARMUP_MS', 400);
 
   const { config, configPath } = await setupConfig(role);
-  const alicePk = await profilePublicKeyHex(TEST_CREDENTIALS.profileAlice);
-  const bobPk = await profilePublicKeyHex(TEST_CREDENTIALS.profileBob);
+  const wallStart = Date.now();
 
-  console.log(`[${role}] config: ${configPath}`);
-  console.log(`[${role}] data:   ${config.dataDir}`);
-  console.log(`[${role}] alice profile pk: ${alicePk.slice(0, 16)}…`);
-  console.log(`[${role}] bob profile pk:   ${bobPk.slice(0, 16)}…`);
+  console.log(
+    `[${role}] payload ${payloadBytes} B (hash ${payloadHash.slice(0, 16)}…) config ${configPath}`,
+  );
 
+  const bootEnd = Date.now();
   const ctx = await createContext(config);
-  try {
-    const discoveryMs = Number(process.env['NEARBYTES_TEST_DISCOVERY_MS'] ?? '10000');
-    console.log(`[${role}] waiting ${discoveryMs}ms for peer discovery…`);
-    await new Promise((r) => setTimeout(r, discoveryMs));
+  const bootMs = bootEnd - wallStart;
+  let phases: RunPhaseTiming | null = null;
 
-    const localPath = path.join(testDirs(role).workDir, ownFile);
-    await writeFile(localPath, ownPayload, 'utf-8');
+  try {
+    if (warmupMs > 0) {
+      await sleep(warmupMs);
+    }
+
+    console.log(`[${role}] waiting for friend sync session (≤${peerWaitMs}ms)…`);
+    const friendWaitStart = Date.now();
+    await waitForFriendSession(ctx.skeleton.log, peerWaitMs);
+    const friendSessionMs = Date.now() - friendWaitStart;
 
     await openAndWatch(ctx, TEST_CREDENTIALS.volume, true);
-    const data = Buffer.from(ownPayload, 'utf-8');
-    await ctx.fileService.addFile(TEST_CREDENTIALS.volume, ownFile, data);
-    console.log(`[${role}] published ${ownFile}`);
+    const pubStart = Date.now();
+    await ctx.fileService.addFile(TEST_CREDENTIALS.volume, ownFile, payload);
+    const publishMs = Date.now() - pubStart;
+    console.log(`[${role}] published ${ownFile} in ${publishMs}ms`);
 
-    console.log(`[${role}] waiting for ${peerFile} (timeout ${timeoutMs}ms)…`);
-    await waitForPeerFile(ctx, peerFile, timeoutMs);
+    console.log(`[${role}] waiting for ${peerFile} (≤${receiveTimeoutMs}ms)…`);
+    const recv = await waitForPeerFile(ctx, peerFile, payloadBytes, receiveTimeoutMs);
+    const peerData = await ctx.fileService.getFile(TEST_CREDENTIALS.volume, recv.blobHash);
+    const peerHash = await computeHash(peerData);
+    const peerRole: Role = role === 'alice' ? 'bob' : 'alice';
+    const expectedPeerHash = await computeHash(makeTestPayload(payloadBytes, peerRole));
+    if (peerHash !== expectedPeerHash) {
+      throw new Error(
+        `Peer file hash mismatch (got ${peerHash.slice(0, 16)}… expected ${expectedPeerHash.slice(0, 16)}…)`,
+      );
+    }
 
     const names = await listFilenames(ctx);
-    console.log(`[${role}] ✓ bidirectional sync OK — files: ${names.join(', ')}`);
-    const graceMs = Number(process.env['NEARBYTES_TEST_GRACE_MS'] ?? '30000');
-    console.log(`[${role}] holding session ${graceMs}ms for peer to finish pull…`);
-    await new Promise((r) => setTimeout(r, graceMs));
-    process.exitCode = 0;
-  } finally {
-    try {
-      await ctx.destroy();
-    } catch {
-      /* transport teardown may reset hyperswarm sockets */
+    const totalWallMs = Date.now() - wallStart;
+    phases = {
+      bootMs,
+      profilePublishMs: 0,
+      discoveryWaitMs: warmupMs,
+      friendSessionMs,
+      publishMs,
+      receiveMs: recv.wallMs,
+      graceMs,
+      totalWallMs,
+    };
+    console.log(
+      `[${role}] ✓ bidirectional OK in ${totalWallMs}ms — friend ${friendSessionMs}ms, recv ${recv.wallMs}ms, files: ${names.join(', ')}`,
+    );
+
+    const markers = await readBenchMarkers(ctx.skeleton.log);
+    const resultPath =
+      process.env['NEARBYTES_TEST_OUT'] ??
+      path.join(testDirs(role).workDir, 'bidirectional-result.json');
+    await writeFile(
+      resultPath,
+      JSON.stringify(
+        {
+          meta: { role, hostname: os.hostname(), payloadBytes, impl: 'nearbytes-sync-v0-hyperswarm-mdns' },
+          phases,
+          markers,
+        },
+        null,
+        2,
+      ),
+    );
+
+    if (graceMs > 0) {
+      await sleep(graceMs);
     }
+    void ctx.destroy().catch(() => {});
+    process.exit(0);
+  } catch (err) {
+    void ctx.destroy().catch(() => {});
+    throw err;
   }
 }
 
@@ -169,9 +259,7 @@ process.on('unhandledRejection', (err) => {
   process.exit(1);
 });
 
-main()
-  .then(() => process.exit(process.exitCode ?? 0))
-  .catch((err) => {
-    console.error(String(err));
-    process.exit(1);
-  });
+main().catch((err) => {
+  console.error(String(err));
+  process.exit(1);
+});

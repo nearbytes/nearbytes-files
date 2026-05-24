@@ -1,7 +1,7 @@
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
-import os from 'os';
+import { fileURLToPath } from 'url';
 import { createCryptoOperations, createSecret, bytesToHex, EventType } from 'nearbytes-crypto';
 import type { AppRecordPayload } from 'nearbytes-crypto';
 import { createSignedEvent, type Log } from 'nearbytes-log';
@@ -20,6 +20,27 @@ export interface BenchMarker {
   readonly event: string;
   readonly t: number;
   readonly fields: Record<string, string | number | boolean>;
+}
+
+/** Wall-clock phases for paper tables (per process). */
+export interface RunPhaseTiming {
+  readonly bootMs: number;
+  readonly profilePublishMs: number;
+  readonly discoveryWaitMs: number;
+  readonly friendSessionMs: number | null;
+  readonly publishMs: number | null;
+  readonly receiveMs: number | null;
+  readonly graceMs: number;
+  readonly totalWallMs: number;
+}
+
+export function markerOffsetMs(
+  markers: readonly BenchMarker[],
+  event: string,
+  sinceMs: number,
+): number | null {
+  const hit = markers.find((m) => m.event === event && m.t >= sinceMs);
+  return hit !== undefined ? hit.t - sinceMs : null;
 }
 
 export interface TrialManifestEntry {
@@ -55,10 +76,17 @@ export async function profilePublicKeyHex(secret: string): Promise<string> {
   return bytesToHex(kp.publicKey);
 }
 
+export function benchRepoRoot(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, '..', '..');
+}
+
+export function defaultBenchWorkBase(): string {
+  return path.join(benchRepoRoot(), '.local', 'bench', 'work');
+}
+
 export function benchWorkDir(role: BenchRole): string {
-  const base =
-    process.env['NEARBYTES_BENCH_BASE'] ??
-    path.join(os.tmpdir(), 'nearbytes-sync-benchmark');
+  const base = process.env['NEARBYTES_BENCH_BASE'] ?? defaultBenchWorkBase();
   return path.join(base, role === 'sender' ? 'alice' : 'bob');
 }
 
@@ -189,6 +217,70 @@ export async function readActivityRaw(dataDir: string): Promise<string[]> {
   if (!existsSync(filePath)) return [];
   const text = await readFile(filePath, 'utf-8');
   return text.trim().split('\n').filter(Boolean);
+}
+
+export interface BenchActivityEvent {
+  readonly bench: string;
+  readonly t: number;
+  readonly kind?: string;
+  readonly bytes?: number;
+  readonly name?: string;
+}
+
+export function parseBenchActivityLines(activityLog: readonly string[]): BenchActivityEvent[] {
+  const events: BenchActivityEvent[] = [];
+  for (const line of activityLog) {
+    if (!line.startsWith('bench ')) continue;
+    try {
+      events.push(JSON.parse(line.slice(6)) as BenchActivityEvent);
+    } catch {
+      /* skip */
+    }
+  }
+  return events.sort((a, b) => a.t - b.t);
+}
+
+/** Goodput from first-to-last inbound-stored block between throughput phase markers. */
+export function goodputFromInboundMarkers(
+  receiverLog: readonly string[],
+  nominalBytes: number,
+  senderLog: readonly string[] = [],
+): {
+  readonly goodputMbps: number;
+  readonly durationMs: number;
+  readonly bytesReceived: number;
+} | null {
+  const phaseEvents = parseBenchActivityLines(senderLog.length > 0 ? senderLog : receiverLog);
+  const start = phaseEvents.find((e) => e.bench === 'throughput-phase-start');
+  if (!start) return null;
+  const t0 = start.t;
+  const minBlockBytes =
+    nominalBytes > 16 * 1024 * 1024
+      ? 1024 * 1024
+      : nominalBytes > 0
+        ? Math.max(4096, Math.floor(nominalBytes / 16))
+        : 4096;
+  const events = parseBenchActivityLines(receiverLog);
+  const blocks = events.filter(
+    (e) =>
+      e.bench === 'inbound-stored' &&
+      e.kind === 'block' &&
+      e.t >= t0 &&
+      Number(e.bytes) >= minBlockBytes,
+  );
+  if (blocks.length === 0) return null;
+  const first = blocks[0]!.t;
+  const last = blocks[blocks.length - 1]!.t;
+  const durationMs =
+    blocks.length === 1 ? Math.max(1, last - t0) : Math.max(1, last - first);
+  const bytesReceived = blocks.reduce((s, b) => s + (Number(b.bytes) || 0), 0);
+  const effective =
+    nominalBytes > 0 ? Math.min(nominalBytes, bytesReceived) : bytesReceived;
+  return {
+    goodputMbps: (effective * 8) / (durationMs * 1000),
+    durationMs,
+    bytesReceived,
+  };
 }
 
 export async function listBenchFilenames(ctx: Context): Promise<string[]> {

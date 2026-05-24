@@ -82,7 +82,7 @@ const alice = spawnRole('alice', runBase);
 
 await Promise.all([bob.wait(), alice.wait()]);
 
-const reportPath = path.join(reportDir, 'bench-report.json');
+const reportPath = path.join(reportDir, 'sync-report.json');
 await new Promise((res, rej) => {
   const m = spawn(
     process.execPath,

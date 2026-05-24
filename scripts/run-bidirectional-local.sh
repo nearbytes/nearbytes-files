@@ -3,7 +3,7 @@
 # Uses friend handshake + 12s wall clock — will not hang for minutes.
 #
 #   bash scripts/run-bidirectional-local.sh
-#   yarn test:sync-bidirectional:local   # preferred (same flow + LaTeX)
+#   yarn e2e:bidirectional:local   # preferred (same flow via e2e harness)
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -61,12 +61,7 @@ fi
 node scripts/merge-bidirectional-report.mjs \
   --alice "$BASE/alice/bidirectional-result.json" \
   --bob "$BASE/bob/bidirectional-result.json" \
-  --out "$BASE/bench-report.json" \
+  --out "$BASE/sync-report.json" \
   --topology "localhost (two processes, 1 MiB each way)"
 
-node scripts/render-benchmark-figures.mjs \
-  --report "$BASE/bench-report.json" \
-  --outdir "$ROOT/.local/bench/reports/bidirectional-manual/tex"
-
-echo "Report: $BASE/bench-report.json"
-echo "LaTeX:  $ROOT/.local/bench/reports/bidirectional-manual/tex/"
+echo "Report: $BASE/sync-report.json"

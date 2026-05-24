@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Merge alice + bob bidirectional-result.json into bench-report.json (metrics + phases).
+ * Merge alice + bob bidirectional-result.json into sync-report.json (metrics + phases).
  */
 
 import { readFile, writeFile, mkdir } from 'fs/promises';
@@ -13,7 +13,7 @@ function arg(name, fallback) {
 
 const alicePath = arg('--alice', '');
 const bobPath = arg('--bob', '');
-const outPath = arg('--out', 'bench-report.json');
+const outPath = arg('--out', 'sync-report.json');
 const topology = arg('--topology', 'localhost bidirectional');
 
 if (!alicePath || !bobPath) {

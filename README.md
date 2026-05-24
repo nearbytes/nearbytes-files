@@ -105,25 +105,14 @@ const data = await files.getFile('myvol:password', meta.blobHash);
 
 Main exports: `FileService`, `createFileService`, volume replay (`openVolume`, `materializeVolume`, `replayEvents`), file crypto helpers, reference bundles, and types (`FileMetadata`, `VolumeFileSystemState`, …).
 
-## Testing and benchmarks
-
-Configuration for remote hosts and output paths: copy `config/e2e.local.example.json` to `config/e2e.local.json` (gitignored) and edit `remoteHost`.
-
-All benchmark/e2e workdirs and reports go under `.local/` (gitignored).
+## Testing
 
 | Script | What it does |
 |--------|----------------|
-| `yarn e2e:local` | CI smoke: latency-only + quick bandwidth (~10s) |
-| `yarn e2e:paper:local` | **Paper profile:** warmup discard, 10×/size latency, 32 MiB stream (~60–120s) |
-| `yarn e2e:bidirectional:local` | Bidirectional 1 MiB smoke + hash verify |
-| `yarn e2e:remote` | Full legacy benchmark vs `remoteHost` |
-| `yarn e2e:remote:paper` | Paper profile on remote host pair |
-| `yarn e2e:remote:latency` | Latency-only remote run |
-| `yarn e2e:remote:quick` | Quick remote smoke (~30s target) |
+| `yarn e2e:bidirectional:local` | Bidirectional 1 MiB friend-sync smoke + hash verify (~12s wall) |
+| `yarn test:sync-bidirectional:local` | Same as above |
 
-Methodology: `nearbytes-specs/requirements/benchmark-methodology-v1.md`.
-
-Lower-level: `yarn bench:sync` (single role via `NEARBYTES_BENCH_ROLE`), `yarn bench:sync:merge`, `yarn bench:sync:figures`.
+Performance benchmarks and paper campaigns live in **`nearbytes-benchmarks`** (sibling repo).
 
 Requires sibling packages built (`nearbytes-log`, `nearbytes-sync` via `nearbytes-skeleton`). Run `yarn build` before e2e.
 

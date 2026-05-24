@@ -1,9 +1,5 @@
 {
   "remoteHost": "pc-ciancia",
   "sshConnectTimeoutSec": 10,
-  "benchBaseLocal": ".local/bench/work",
-  "benchBaseRemote": "/tmp/nearbytes-sync-benchmark",
-  "benchReportsDir": ".local/bench/reports",
-  "e2eWorkDir": ".local/e2e/work",
-  "paperFiguresDir": "../../NEARBYTES-PAPERS/paper-nearbytes-hypercore/figures"
+  "e2eWorkDir": ".local/e2e/work"
 }

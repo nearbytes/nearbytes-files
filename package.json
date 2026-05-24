@@ -27,6 +27,14 @@
     "./chat": {
       "import": "./dist/chat.js",
       "types": "./dist/chat.d.ts"
+    },
+    "./cli/context": {
+      "import": "./dist/cli/context.js",
+      "types": "./dist/cli/context.d.ts"
+    },
+    "./chatCodec": {
+      "import": "./dist/chatCodec.js",
+      "types": "./dist/chatCodec.d.ts"
     }
   },
   "scripts": {
@@ -35,25 +43,10 @@
     "prepare": "tsc",
     "nbf": "node dist/cli/index.js",
     "repl": "node dist/cli/index.js repl",
-    "e2e:local": "node tests/e2e/sync-metrics-local.mjs",
-    "e2e:paper:local": "node tests/e2e/sync-metrics-paper-local.mjs",
     "e2e:bidirectional:local": "node tests/e2e/sync-bidirectional-local.mjs",
-    "e2e:remote": "node tests/e2e/sync-metrics-remote.mjs",
-    "e2e:remote:latency": "node tests/e2e/sync-metrics-remote.mjs --latency",
-    "e2e:remote:quick": "node tests/e2e/sync-metrics-remote.mjs --quick",
-    "e2e:remote:paper": "node tests/e2e/sync-metrics-remote.mjs --paper",
     "test:sync-bidirectional": "node dist/scripts/sync-bidirectional-test.js",
     "test:sync-bidirectional:local": "yarn e2e:bidirectional:local",
-    "test:sync-bidirectional:remote": "bash scripts/run-sync-bidirectional-remote.sh",
-    "bench:sync": "node dist/scripts/sync-benchmark.js",
-    "bench:sync:merge": "node scripts/merge-benchmark-results.mjs",
-    "bench:sync:figures": "node scripts/render-benchmark-figures.mjs",
-    "bench:sync:remote": "node tests/e2e/sync-metrics-remote.mjs",
-    "bench:sync:quick": "NEARBYTES_BENCH_QUICK=1 node dist/scripts/sync-benchmark.js",
-    "bench:sync:remote:quick": "node tests/e2e/sync-metrics-remote.mjs --quick",
-    "bench:sync:remote:latency": "node tests/e2e/sync-metrics-remote.mjs --latency",
-    "bench:sync:paper": "NEARBYTES_BENCH_PROFILE=paper node dist/scripts/sync-benchmark.js",
-    "bench:sync:remote:paper": "node tests/e2e/sync-metrics-remote.mjs --paper"
+    "test:sync-bidirectional:remote": "bash scripts/run-sync-bidirectional-remote.sh"
   },
   "license": "MIT",
   "engines": {

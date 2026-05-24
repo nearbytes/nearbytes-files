@@ -14,7 +14,7 @@ import { createCryptoOperations, createSecret, bytesToHex, computeHash } from 'n
 import { writeConfig, type NearbytesConfig } from 'nearbytes-skeleton';
 import type { Log } from 'nearbytes-log';
 import { createContext, openAndWatch } from '../cli/context.js';
-import { readBenchMarkers, type RunPhaseTiming } from './benchmark-lib.js';
+import { readBenchMarkers, type RunPhaseTiming } from './test-markers.js';
 
 /** Public test identities — do not use in production. */
 export const TEST_CREDENTIALS = {

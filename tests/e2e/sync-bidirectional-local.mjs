@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Fast bidirectional friend-sync on one machine (~10s wall, 1 MiB each way).
- * Writes bench-report.json + LaTeX fragments.
+ * Writes bidirectional JSON report under .local/e2e/.
  *
  *   yarn e2e:bidirectional:local
  */
@@ -10,7 +10,7 @@ import { mkdir, rm, access } from 'fs/promises';
 import path from 'path';
 import { spawn } from 'child_process';
 import { getRepoRoot } from './lib/config.mjs';
-import { sleep } from './lib/spawn-bench.mjs';
+import { sleep } from './lib/util.mjs';
 
 const WALL_SEC = 12;
 const FAST_ENV = {
@@ -25,15 +25,7 @@ const FAST_ENV = {
 const root = getRepoRoot();
 const testJs = path.join(root, 'dist/scripts/sync-bidirectional-test.js');
 const runBase = path.join(root, '.local', 'e2e', 'bidirectional', Date.now().toString());
-const reportDir = path.join(root, '.local', 'bench', 'reports', 'e2e-bidirectional');
-const paperFigures = path.join(
-  root,
-  '..',
-  '..',
-  'NEARBYTES-PAPERS',
-  'paper-nearbytes-hypercore',
-  'figures',
-);
+const reportDir = path.join(root, '.local', 'e2e', 'reports', 'bidirectional');
 
 async function ensureBuilt() {
   try {
@@ -110,26 +102,9 @@ await new Promise((res, rej) => {
   m.on('exit', (c) => (c === 0 ? res() : rej(new Error(`merge exit ${c}`))));
 });
 
-await mkdir(paperFigures, { recursive: true });
-await new Promise((res, rej) => {
-  const r = spawn(
-    process.execPath,
-    [
-      path.join(root, 'scripts/render-benchmark-figures.mjs'),
-      '--report',
-      reportPath,
-      '--outdir',
-      paperFigures,
-    ],
-    { cwd: root, stdio: 'inherit' },
-  );
-  r.on('exit', (c) => (c === 0 ? res() : rej(new Error(`figures exit ${c}`))));
-});
-
 const report = JSON.parse(await (await import('fs/promises')).readFile(reportPath, 'utf-8'));
 console.log(`\nBidirectional e2e passed in ${((Date.now() - t0) / 1000).toFixed(1)}s.`);
 console.log(`Report: ${reportPath}`);
-console.log(`LaTeX:  ${paperFigures}/benchmark-tables.tex`);
 if (report.phases?.alice) {
   console.log(
     `Phases — Alice: boot ${report.phases.alice.bootMs}ms, friend ${report.phases.alice.friendSessionMs}ms, recv ${report.phases.alice.receiveMs}ms`,

@@ -35,21 +35,3 @@ export async function getRemoteHost() {
   return process.env['NEARBYTES_REMOTE_HOST'] ?? cfg.remoteHost;
 }
 
-export async function getBenchPaths() {
-  const cfg = await loadE2eConfig();
-  return {
-    benchBaseLocal: resolveRepoPath(
-      process.env['NEARBYTES_BENCH_BASE'] ?? cfg.benchBaseLocal,
-    ),
-    benchBaseRemote:
-      process.env['NEARBYTES_BENCH_BASE_REMOTE'] ?? cfg.benchBaseRemote,
-    benchReportsDir: resolveRepoPath(
-      process.env['NEARBYTES_BENCH_OUTDIR'] ?? cfg.benchReportsDir,
-    ),
-    e2eWorkDir: resolveRepoPath(process.env['NEARBYTES_E2E_WORK'] ?? cfg.e2eWorkDir),
-    paperFiguresDir: resolveRepoPath(cfg.paperFiguresDir),
-    sshConnectTimeoutSec: Number(
-      process.env['NEARBYTES_SSH_CONNECT_TIMEOUT'] ?? cfg.sshConnectTimeoutSec ?? 10,
-    ),
-  };
-}

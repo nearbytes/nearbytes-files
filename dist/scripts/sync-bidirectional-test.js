@@ -12,7 +12,7 @@ import os from 'os';
 import { createCryptoOperations, createSecret, bytesToHex, computeHash } from 'nearbytes-crypto';
 import { writeConfig } from 'nearbytes-skeleton';
 import { createContext, openAndWatch } from '../cli/context.js';
-import { readBenchMarkers } from './benchmark-lib.js';
+import { readBenchMarkers } from './test-markers.js';
 /** Public test identities — do not use in production. */
 export const TEST_CREDENTIALS = {
     profileAlice: 'nearbytes-alice:beautiful-document',

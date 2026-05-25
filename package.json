@@ -38,6 +38,7 @@
     }
   },
   "scripts": {
+    "prepack": "tsc",
     "build": "tsc",
     "type-check": "tsc --noEmit",
     "nbf": "tsc && node dist/cli/index.js",

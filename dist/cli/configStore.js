@@ -26,6 +26,9 @@ export async function persistConfig(ctx, next) {
     const path = defaultConfigPath();
     await writeConfig(next, path);
     ctx.config = next;
-    await ctx.skeleton.reloadSync(next.friends, next.profileSecret);
+    await ctx.skeleton.reloadSync(next.friends, {
+        profiles: next.profiles,
+        activeProfile: next.activeProfile,
+    });
 }
 //# sourceMappingURL=configStore.js.map

@@ -17,16 +17,16 @@ export async function cmdFriendAdd(ctx, publicKey) {
         return;
     }
     const friends = [...ctx.config.friends, pk];
-    const syncWasOffline = !ctx.config.profileSecret;
+    const syncWasOffline = ctx.config.profiles.length === 0;
     await persistConfig(ctx, { ...ctx.config, friends });
     console.log(green(`✓ Following ${pk}`));
     if (syncWasOffline) {
-        console.log(yellow('  ! Sync is offline (no profile identity) — run ') +
-            bold('profile init <secret>') +
+        console.log(yellow('  ! Sync is offline (no profile configured) — run ') +
+            bold('profile add <name> <secret>') +
             yellow(' to activate it.'));
     }
     else {
-        console.log(dim('  Sync is active for this session (reloaded).'));
+        console.log(dim(`  Sync is active across ${ctx.config.profiles.length} profile(s); every served profile now follows ${pk.slice(0, 16)}….`));
     }
 }
 export async function cmdFriendRemove(ctx, prefixOrKey) {

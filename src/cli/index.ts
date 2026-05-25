@@ -27,9 +27,12 @@ import {
   cmdFriendList,
   cmdFriendAdd,
   cmdFriendRemove,
-  cmdProfileInit,
+  cmdProfileAdd,
+  cmdProfileUse,
+  cmdProfileList,
   cmdProfileShow,
   cmdProfilePublish,
+  cmdProfileRemove,
   red,
 } from './commands.js';
 import { startRepl } from './repl.js';
@@ -189,46 +192,94 @@ fileCmd
 
 // ── profile ───────────────────────────────────────────────────────────────
 
-const profileCmd = program.command('profile').description('Profile identity for sync');
+const profileCmd = program
+  .command('profile')
+  .description('Profile (sync keypair — one or many served in parallel)');
 
 profileCmd
-  .command('init')
-  .description('Save profile secret and print profile public key')
-  .requiredOption('-s, --secret <secret>', 'Profile secret (name:password)')
-  .action(async (opts: { secret: string }) => {
+  .command('add')
+  .description('Add a named profile slot (first one becomes active)')
+  .argument('<name>', 'Local name for this profile (unique)')
+  .argument('<secret>', 'Profile secret (name:password)')
+  .action(async (name: string, secret: string) => {
     const gopts = program.opts<{ config?: string; dataDir: string }>();
     const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(async () => {
-      await cmdProfileInit(ctx, opts.secret);
+      await cmdProfileAdd(ctx, name, secret);
+      await ctx.destroy();
+    });
+  });
+
+profileCmd
+  .command('use')
+  .description('Set the active profile (signs publish/follower dials)')
+  .argument('<name>', 'Name of an existing profile')
+  .action(async (name: string) => {
+    const gopts = program.opts<{ config?: string; dataDir: string }>();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+      await cmdProfileUse(ctx, name);
+      await ctx.destroy();
+    });
+  });
+
+profileCmd
+  .command('list')
+  .alias('ls')
+  .description('List configured profiles with active marker')
+  .action(async () => {
+    const gopts = program.opts<{ config?: string; dataDir: string }>();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+      await cmdProfileList(ctx);
       await ctx.destroy();
     });
   });
 
 profileCmd
   .command('show')
-  .description('Show profile public key from config')
-  .action(async () => {
+  .description('Show the public key of a profile (default: active)')
+  .argument('[name]', 'Profile name (default: active)')
+  .action(async (name?: string) => {
     const gopts = program.opts<{ config?: string; dataDir: string }>();
     const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(async () => {
-      await cmdProfileShow(ctx);
+      await cmdProfileShow(ctx, name);
       await ctx.destroy();
     });
   });
 
 profileCmd
   .command('publish')
-  .description('Publish identity record on profile channel')
+  .description('Publish nb.identity.record.v1 signed by the active or selected profile')
   .requiredOption('-n, --name <name>', 'Display name')
   .option('-b, --bio <bio>', 'Optional bio')
-  .action(async (opts: { name: string; bio?: string }) => {
+  .option('--as <profile>', 'Sign with this profile name instead of the active one')
+  .action(async (opts: { name: string; bio?: string; as?: string }) => {
     const gopts = program.opts<{ config?: string; dataDir: string }>();
     const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(async () => {
-      await cmdProfilePublish(ctx, opts.name, opts.bio);
+      await cmdProfilePublish(ctx, opts.name, opts.bio, opts.as);
+      await ctx.destroy();
+    });
+  });
+
+profileCmd
+  .command('remove')
+  .alias('rm')
+  .description('Remove a profile slot (re-elects active if needed)')
+  .argument('<name>', 'Profile name')
+  .action(async (name: string) => {
+    const gopts = program.opts<{ config?: string; dataDir: string }>();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+      await cmdProfileRemove(ctx, name);
       await ctx.destroy();
     });
   });

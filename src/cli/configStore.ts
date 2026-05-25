@@ -30,5 +30,8 @@ export async function persistConfig(ctx: Context, next: NearbytesConfig): Promis
   const path = defaultConfigPath();
   await writeConfig(next, path);
   ctx.config = next;
-  await ctx.skeleton.reloadSync(next.friends, next.profileSecret);
+  await ctx.skeleton.reloadSync(next.friends, {
+    profiles: next.profiles,
+    activeProfile: next.activeProfile,
+  });
 }

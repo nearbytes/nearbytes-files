@@ -50,9 +50,9 @@
   },
   "dependencies": {
     "commander": "^12.0.0",
-    "nearbytes-crypto": "file:../nearbytes-crypto",
-    "nearbytes-log": "file:../nearbytes-log",
-    "nearbytes-skeleton": "file:../nearbytes-skeleton"
+    "nearbytes-crypto": "github:nearbytes/nearbytes-crypto#main",
+    "nearbytes-log": "github:nearbytes/nearbytes-log#main",
+    "nearbytes-skeleton": "github:nearbytes/nearbytes-skeleton#main"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

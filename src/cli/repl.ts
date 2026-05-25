@@ -35,9 +35,12 @@ import {
   cmdFriendAdd,
   cmdFriendRemove,
   cmdFriendShow,
-  cmdProfileInit,
+  cmdProfileAdd,
+  cmdProfileUse,
+  cmdProfileList,
   cmdProfileShow,
   cmdProfilePublish,
+  cmdProfileRemove,
 } from './commands.js';
 import type { Context } from './context.js';
 import { createReplCompleter } from './replCompleter.js';
@@ -153,19 +156,58 @@ async function dispatch(ctx: Context, tokens: string[]): Promise<void> {
     case 'profile': {
       const [subverb, ...subargs] = rest;
       switch ((subverb ?? '').toLowerCase()) {
-        case 'init': {
-          const [secret] = subargs;
-          if (!secret) throw new Error('Usage: profile init <secret>');
-          await cmdProfileInit(ctx, secret);
+        case 'add': {
+          const [name, secret] = subargs;
+          if (!name || !secret) throw new Error('Usage: profile add <name> <secret>');
+          await cmdProfileAdd(ctx, name, secret);
           break;
         }
-        case 'show':
-          await cmdProfileShow(ctx);
+        case 'use': {
+          const [name] = subargs;
+          if (!name) throw new Error('Usage: profile use <name>');
+          await cmdProfileUse(ctx, name);
           break;
+        }
+        case 'list':
+        case 'ls':
+          await cmdProfileList(ctx);
+          break;
+        case 'show': {
+          const [name] = subargs;
+          await cmdProfileShow(ctx, name);
+          break;
+        }
         case 'publish': {
-          const [displayName, ...bioParts] = subargs;
-          if (!displayName) throw new Error('Usage: profile publish <displayName> [bio]');
-          await cmdProfilePublish(ctx, displayName, bioParts.length > 0 ? bioParts.join(' ') : undefined);
+          const positional: string[] = [];
+          let asName: string | undefined;
+          for (let i = 0; i < subargs.length; i++) {
+            const tok = subargs[i]!;
+            if (tok === '--as' && subargs[i + 1]) {
+              asName = subargs[i + 1];
+              i += 1;
+            } else {
+              positional.push(tok);
+            }
+          }
+          const [displayName, ...bioParts] = positional;
+          if (!displayName) {
+            throw new Error('Usage: profile publish <displayName> [bio] [--as <name>]');
+          }
+          await cmdProfilePublish(
+            ctx,
+            displayName,
+            bioParts.length > 0 ? bioParts.join(' ') : undefined,
+            asName,
+          );
+          break;
+        }
+        case 'remove':
+        case 'rm':
+        case 'del':
+        case 'delete': {
+          const [name] = subargs;
+          if (!name) throw new Error('Usage: profile remove <name>');
+          await cmdProfileRemove(ctx, name);
           break;
         }
         default:
@@ -297,13 +339,21 @@ export async function startRepl(ctx: Context): Promise<void> {
       dim(' — Tab complete, ↑↓ history, ^R search, ^C cancel line, ^D exit'),
   );
   console.log(dim(`  History: ${historySession.lines.length} entries (saved on exit)`));
-  if (!ctx.config.profileSecret) {
+  if (ctx.config.profiles.length === 0) {
     console.log('');
-    console.log(yellow('  ! No profile identity configured — sync is offline.'));
+    console.log(yellow('  ! No profile configured — sync is offline.'));
     console.log(
       dim('    Run ') +
-        bold('profile init <secret>') +
-        dim(' to declare your identity; sync activates automatically once it is saved.'),
+        bold('profile add <name> <secret>') +
+        dim(' to declare your first profile; sync activates automatically once it is saved.'),
+    );
+  } else {
+    const active = ctx.config.activeProfile ?? '(none)';
+    console.log('');
+    console.log(
+      dim(
+        `  Profiles served: ${ctx.config.profiles.length} (active: ${bold(active)}). Sync syncs all of them.`,
+      ),
     );
   }
   console.log('');

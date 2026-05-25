@@ -174,17 +174,20 @@ export async function cmdVolumes(ctx) {
 // help
 // ---------------------------------------------------------------------------
 export { cmdFriendList, cmdFriendAdd, cmdFriendRemove, cmdFriendShow } from './friendsCommands.js';
-export { cmdProfileInit, cmdProfileShow, cmdProfilePublish } from './profileCommands.js';
+export { cmdProfileAdd, cmdProfileUse, cmdProfileList, cmdProfileShow, cmdProfilePublish, cmdProfileRemove, } from './profileCommands.js';
 export function cmdHelp() {
     console.log(`
 ${bold('Nearbytes REPL')}
 
-${cyan('Profile (sync identity)')}
-  profile init <secret>           Save profile secret; show your profile public key
-  profile show                    Show profile public key from config
-  profile publish <displayName>   Publish nb.identity.record.v1 on your profile channel
+${cyan('Profile (sync keypair — one or many served in parallel)')}
+  profile add <name> <secret>     Add a named profile slot (first one becomes active)
+  profile use <name>              Set the active profile (signs publish/follower dials)
+  profile list                    List configured profiles with active marker
+  profile show [<name>]           Show the public key of a profile (default: active)
+  profile publish <displayName> [--as <name>]   Publish nb.identity.record.v1 signed by the active or selected profile
+  profile remove <name>           Remove a profile slot
 
-${cyan('Friends (asymmetric follow)')}
+${cyan('Friends (asymmetric follow, shared across all profiles)')}
   friend list                     List followed profile public keys
   friend add <profile-pubkey>     Follow a friend (sync their profile topic)
   friend remove <key|prefix>      Stop following

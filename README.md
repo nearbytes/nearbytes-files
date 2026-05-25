@@ -4,24 +4,26 @@ Encrypted file volumes on a cryptographic event log — library (`FileService`) 
 
 ## Setup
 
-Internal deps (`nearbytes-crypto`, `nearbytes-log`, `nearbytes-sync`, `nearbytes-skeleton`) are sibling repos under the same parent directory. A single script clones them all if missing, fast-forwards each against its `main`, and builds `dist/` in dependency order:
+Internal deps (`nearbytes-crypto`, `nearbytes-log`, `nearbytes-sync`, `nearbytes-skeleton`) are sibling repos under the same parent directory. A single portable Node script clones them all if missing, fast-forwards each against its `main`, and builds `dist/` in dependency order.
 
-```sh
-./update.sh
-```
-
-That's the only command you ever need. Run it once on a new machine to bootstrap, and re-run it any time someone pushes to any of the sibling repos. After it finishes, plain `yarn run repl`, `yarn nbf -- <args>`, `yarn build`, etc. in any of the repos works as expected.
-
-First-time bootstrap on a fresh machine:
+First-time bootstrap on a fresh machine (works on macOS, Linux, and Windows; needs Node 18+ and Git):
 
 ```sh
 mkdir -p ~/data/local/repos/NEARBYTES
 cd ~/data/local/repos/NEARBYTES
 git clone https://github.com/nearbytes/nearbytes-files.git
-./nearbytes-files/update.sh
+node nearbytes-files/scripts/update.mjs
 ```
 
-`update.sh` reads `NEARBYTES_ROOT` (default: the parent dir of the script) and operates on the sibling repos `nearbytes-{crypto,log,sync,skeleton,files,benchmarks}`.
+Thereafter — every time anything in any Nearbytes repo's `main` moved — just run:
+
+```sh
+yarn update
+```
+
+That's the only command you ever need. After it finishes, plain `yarn run repl`, `yarn nbf -- <args>`, `yarn build`, etc. in any of the repos works as expected.
+
+The script reads `NEARBYTES_ROOT` (default: the parent dir of the script) and operates on the sibling repos `nearbytes-{crypto,log,sync,skeleton,files,benchmarks}`.
 
 ## CLI (`nbf`)
 

@@ -237,10 +237,14 @@ async function main(): Promise<void> {
     if (graceMs > 0) {
       await sleep(graceMs);
     }
-    void ctx.destroy().catch(() => {});
+    void ctx.destroy().catch((err) => {
+      console.error('[nearbytes-files] ctx.destroy failed:', err);
+    });
     process.exit(0);
   } catch (err) {
-    void ctx.destroy().catch(() => {});
+    void ctx.destroy().catch((err) => {
+      console.error('[nearbytes-files] ctx.destroy failed:', err);
+    });
     throw err;
   }
 }

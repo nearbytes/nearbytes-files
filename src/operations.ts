@@ -53,19 +53,18 @@ export async function storeData(
   // 3. Encrypt data
   const encryptedData = await crypto.encryptSym(data, symmetricKey);
 
-  // 4. Compute hash of encrypted data
-  const dataHash = await computeHash(encryptedData);
+  // 4. Hand the encrypted block to the log; the log is the sole authority of
+  //    the block content-address (storage/log-api-v1.md §2.3) and returns the
+  //    SHA-256 hash of the bytes it persisted.
+  const dataHash = await channelStorage.blocks.store(encryptedData, false);
 
-  // 5. Store encrypted data
-  await channelStorage.blocks.store(dataHash, encryptedData, false);
-
-  // 6. Derive symmetric key for encrypting the data encryption key
+  // 5. Derive symmetric key for encrypting the data encryption key
   const keyEncryptionKey = await crypto.deriveSymKey(keyPair.privateKey);
 
-  // 7. Encrypt the symmetric key
+  // 6. Encrypt the symmetric key
   const encryptedKey = await crypto.encryptSym(symmetricKey, keyEncryptionKey);
 
-  // 8. Create event payload (spec: file-events-v0.3)
+  // 7. Create event payload (spec: file-events-v0.3)
   const payload: EventPayload = {
     type: EventType.CREATE_FILE,
     filename: fileName,
@@ -160,14 +159,12 @@ export async function storeDataDeduplicated(
   // 3. Encrypt data
   const encryptedData = await crypto.encryptSym(data, symmetricKey);
 
-  // 4. Compute hash of encrypted data
-  const dataHash = await computeHash(encryptedData);
-
-  // 5. Check if data already exists
-  const dataExists = await channelStorage.blocks.has(dataHash);
-
-  // 6. Store encrypted data (skip if already exists)
-  await channelStorage.blocks.store(dataHash, encryptedData, true);
+  // 4. Probe deduplication via SHA-256 of the encrypted bytes, then hand the
+  //    block to the log (which is the sole authority of the content-address).
+  //    The hash returned by `store` is the address we reference downstream.
+  const probeHash = await computeHash(encryptedData);
+  const dataExists = await channelStorage.blocks.has(probeHash);
+  const dataHash = await channelStorage.blocks.store(encryptedData, true);
 
   // 7. Derive symmetric key for encrypting the data encryption key
   const keyEncryptionKey = await crypto.deriveSymKey(keyPair.privateKey);

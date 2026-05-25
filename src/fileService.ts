@@ -444,12 +444,12 @@ async function addFileWithDeps(
 
   const keyPair = await crypto.deriveKeys(normalizedSecret);
   const encrypted = await encryptFileForVolume(crypto, keyPair.privateKey, data);
-  await channelStorage.blocks.store(encrypted.blobHash, encrypted.encryptedData, true);
+  const blobHash = await channelStorage.blocks.store(encrypted.encryptedData, true);
 
   const createdAt = now();
   await appendCreateEvent(channelStorage, crypto, keyPair, {
     filename,
-    blobHash: encrypted.blobHash,
+    blobHash,
     encryptedKey: encrypted.encryptedKey,
     contentType: encrypted.contentType,
     mimeType,
@@ -458,7 +458,7 @@ async function addFileWithDeps(
 
   return {
     filename,
-    blobHash: encrypted.blobHash,
+    blobHash,
     contentType: encrypted.contentType,
     size: data.length,
     mimeType,
@@ -1317,10 +1317,10 @@ async function upgradeLegacyFilesForExport(
     const encryptedData = await channelStorage.blocks.retrieve(file.blobHash as Hash);
     const plaintext = await decryptFileForVolume(crypto, keyPair.privateKey, encryptedData, file.encryptedKey);
     const encrypted = await encryptFileForVolume(crypto, keyPair.privateKey, plaintext);
-    await channelStorage.blocks.store(encrypted.blobHash, encrypted.encryptedData, true);
+    const blobHash = await channelStorage.blocks.store(encrypted.encryptedData, true);
     await appendCreateEvent(channelStorage, crypto, keyPair, {
       filename: file.filename,
-      blobHash: encrypted.blobHash,
+      blobHash,
       encryptedKey: encrypted.encryptedKey,
       contentType: encrypted.contentType,
       mimeType: file.mimeType,
@@ -1388,8 +1388,12 @@ async function ensureDestinationBlockAvailable(
   channelStorage: Log,
   blobHash: string,
 ): Promise<void> {
+  // We retrieve from one destination (which verifies the digest by default,
+  // see Log.blocks.retrieve), then mirror to another destination. The bytes
+  // have just been verified to match `blobHash`, so we use the streaming
+  // fast path (`storeAlreadyVerified`) to avoid a second SHA-256 pass.
   const encryptedData = await channelStorage.blocks.retrieve(blobHash as Hash);
-  await channelStorage.blocks.store(blobHash as Hash, encryptedData as EncryptedData, false);
+  await channelStorage.blocks.storeAlreadyVerified(blobHash as Hash, encryptedData as EncryptedData, false);
 }
 
 function nextCreateTimestamp(entries: readonly EventLogEntry[], fallbackNow: number): number {

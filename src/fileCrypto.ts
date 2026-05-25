@@ -1,5 +1,5 @@
 import type { CryptoOperations } from 'nearbytes-crypto';
-import type { EncryptedData, Hash } from 'nearbytes-crypto';
+import type { EncryptedData } from 'nearbytes-crypto';
 import { createEncryptedData } from 'nearbytes-crypto';
 import type { PrivateKey, PublicKey, SymmetricKey } from 'nearbytes-crypto';
 import { createPublicKey, createSymmetricKey } from 'nearbytes-crypto';
@@ -14,7 +14,6 @@ const HKDF_SALT_LABEL = new TextEncoder().encode('nb.ref.v1');
 const EC_P256_PUBLIC_KEY_BYTES = 65;
 
 export interface EncryptedFileWrite {
-  readonly blobHash: Hash;
   readonly encryptedData: EncryptedData;
   readonly encryptedKey: EncryptedData;
   readonly contentType: 'b';
@@ -34,11 +33,10 @@ export async function encryptFileForVolume(
 ): Promise<EncryptedFileWrite> {
   const fileKey = await crypto.generateSymmetricKey();
   const encryptedData = await crypto.encryptSym(data, fileKey);
-  const blobHash = await crypto.computeHash(encryptedData);
   const encryptedKey = await wrapFileKeyForVolume(crypto, volumePrivateKey, fileKey);
-
+  // The encrypted block's content-address is owned by the log; callers
+  // obtain the `blobHash` from `Log.blocks.store(encryptedData, ...)`.
   return {
-    blobHash,
     encryptedData,
     encryptedKey,
     contentType: 'b',

@@ -745,12 +745,15 @@ async function importSourceBundleItems(bundle, existingFiles, entries, destinati
     return imported;
 }
 async function ensureDestinationBlockAvailable(channelStorage, blobHash) {
-    // We retrieve from one destination (which verifies the digest by default,
-    // see Log.blocks.retrieve), then mirror to another destination. The bytes
-    // have just been verified to match `blobHash`, so we use the streaming
-    // fast path (`storeAlreadyVerified`) to avoid a second SHA-256 pass.
+    // Mirror the block across the channel storage's writable roots: `retrieve`
+    // returns the bytes from whichever root currently holds them (verifying
+    // the digest in the process), and `store` re-hashes the bytes and writes
+    // them to every writable root, which is a no-op for roots that already
+    // hold the block. The streaming `storeAlreadyVerified` fast path is
+    // reserved for `nearbytes-sync` per `nearbytes-specs/storage/log-api-v1.md`
+    // §2.3, so callers outside that package MUST use `store`.
     const encryptedData = await channelStorage.blocks.retrieve(blobHash);
-    await channelStorage.blocks.storeAlreadyVerified(blobHash, encryptedData, false);
+    await channelStorage.blocks.store(encryptedData);
 }
 function nextCreateTimestamp(entries, fallbackNow) {
     const timeline = mapEntriesToTimeline([...entries]);

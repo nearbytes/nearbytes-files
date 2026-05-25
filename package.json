@@ -42,7 +42,8 @@
     "type-check": "tsc --noEmit",
     "nbf": "tsc && node dist/cli/index.js",
     "repl": "tsc && node dist/cli/index.js repl",
-    "prepare": "tsc"
+    "prepare": "tsc",
+    "refresh": "yarn up 'nearbytes-crypto@github:nearbytes/nearbytes-crypto#main' 'nearbytes-log@github:nearbytes/nearbytes-log#main' 'nearbytes-skeleton@github:nearbytes/nearbytes-skeleton#main'"
   },
   "license": "MIT",
   "engines": {

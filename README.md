@@ -4,12 +4,20 @@ Encrypted file volumes on a cryptographic event log — library (`FileService`) 
 
 ## Setup
 
-From this repo (requires sibling packages `nearbytes-crypto`, `nearbytes-log`, `nearbytes-skeleton`):
+Internal deps (`nearbytes-crypto`, `nearbytes-log`, `nearbytes-skeleton`) are pulled from GitHub `main`:
 
 ```sh
-yarn install
+yarn install     # first install / after dep tree changes
 yarn build
 ```
+
+After someone pushes new code to one of the internal repos, run:
+
+```sh
+yarn refresh     # re-resolves internal deps to current main HEAD
+```
+
+Plain `yarn install` won't pick up new `main` commits on its own — Yarn pins each `github:#main` reference to a resolved SHA in `yarn.lock`. `yarn refresh` is just `yarn up` with the right descriptors and updates the pin.
 
 ## CLI (`nbf`)
 

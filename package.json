@@ -1,7 +1,7 @@
 {
   "name": "nearbytes-files",
   "version": "0.1.0",
-  "description": "Nearbytes file protocol — encrypted file storage on top of the event log, with reactive volume and CLI",
+  "description": "Nearbytes file protocol \u2014 encrypted file storage on top of the event log, with reactive volume and CLI",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -41,9 +41,7 @@
     "build": "tsc",
     "type-check": "tsc --noEmit",
     "nbf": "tsc && node dist/cli/index.js",
-    "repl": "tsc && node dist/cli/index.js repl",
-    "refresh": "yarn up --recursive 'nearbytes-*'",
-    "prepack": "tsc"
+    "repl": "tsc && node dist/cli/index.js repl"
   },
   "license": "MIT",
   "engines": {
@@ -51,9 +49,9 @@
   },
   "dependencies": {
     "commander": "^12.0.0",
-    "nearbytes-crypto": "github:nearbytes/nearbytes-crypto#main",
-    "nearbytes-log": "github:nearbytes/nearbytes-log#main",
-    "nearbytes-skeleton": "github:nearbytes/nearbytes-skeleton#main"
+    "nearbytes-crypto": "file:../nearbytes-crypto",
+    "nearbytes-log": "file:../nearbytes-log",
+    "nearbytes-skeleton": "file:../nearbytes-skeleton"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

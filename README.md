@@ -4,20 +4,24 @@ Encrypted file volumes on a cryptographic event log — library (`FileService`) 
 
 ## Setup
 
-Internal deps (`nearbytes-crypto`, `nearbytes-log`, `nearbytes-skeleton`) are pulled from GitHub `main`:
+Internal deps (`nearbytes-crypto`, `nearbytes-log`, `nearbytes-sync`, `nearbytes-skeleton`) are sibling repos under the same parent directory. A single script clones them all if missing, fast-forwards each against its `main`, and builds `dist/` in dependency order:
 
 ```sh
-yarn install     # first install / after dep tree changes
-yarn build
+./update.sh
 ```
 
-After someone pushes new code to one of the internal repos, run:
+That's the only command you ever need. Run it once on a new machine to bootstrap, and re-run it any time someone pushes to any of the sibling repos. After it finishes, plain `yarn run repl`, `yarn nbf -- <args>`, `yarn build`, etc. in any of the repos works as expected.
+
+First-time bootstrap on a fresh machine:
 
 ```sh
-yarn refresh     # re-resolves internal deps to current main HEAD
+mkdir -p ~/data/local/repos/NEARBYTES
+cd ~/data/local/repos/NEARBYTES
+git clone https://github.com/nearbytes/nearbytes-files.git
+./nearbytes-files/update.sh
 ```
 
-Plain `yarn install` won't pick up new `main` commits on its own — Yarn pins each `github:#main` reference to a resolved SHA in `yarn.lock`. `yarn refresh` is just `yarn up` with the right descriptors and updates the pin.
+`update.sh` reads `NEARBYTES_ROOT` (default: the parent dir of the script) and operates on the sibling repos `nearbytes-{crypto,log,sync,skeleton,files,benchmarks}`.
 
 ## CLI (`nbf`)
 
@@ -115,6 +119,4 @@ Main exports: `FileService`, `createFileService`, volume replay (`openVolume`, `
 
 ## Install as dependency
 
-```sh
-yarn add nearbytes/nearbytes-files#main
-```
+This package isn't published to npm. Other repos in the Nearbytes set consume it via `file:../nearbytes-files`; see `update.sh` for the canonical sibling-checkout layout.

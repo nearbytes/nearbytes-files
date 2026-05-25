@@ -50,12 +50,13 @@
   },
   "dependencies": {
     "commander": "^12.0.0",
-    "nearbytes-crypto": "file:../nearbytes-crypto",
-    "nearbytes-log": "file:../nearbytes-log",
-    "nearbytes-skeleton": "file:../nearbytes-skeleton"
+    "nearbytes-crypto": "github:nearbytes/nearbytes-crypto#b63d261fb470e135b20a7c2f5f85691ffa52d695",
+    "nearbytes-log": "github:nearbytes/nearbytes-log#10ff0f0cb8b57b0e6c7ad2e73c7e0d48205295e9",
+    "nearbytes-skeleton": "github:nearbytes/nearbytes-skeleton#4b2215fcca4fea98e043ec7bbb25d0757e9bc0bb"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
     "typescript": "^5.3.2"
-  }
+  },
+  "packageManager": "yarn@4.15.0"
 }

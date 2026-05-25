@@ -4,26 +4,28 @@ Encrypted file volumes on a cryptographic event log — library (`FileService`) 
 
 ## Setup
 
-Internal deps (`nearbytes-crypto`, `nearbytes-log`, `nearbytes-sync`, `nearbytes-skeleton`) are sibling repos under the same parent directory. A single portable Node script clones them all if missing, fast-forwards each against its `main`, and builds `dist/` in dependency order.
+Internal deps (`nearbytes-crypto`, `nearbytes-log`, `nearbytes-skeleton`, …) are pinned in `package.json` as `github:nearbytes/<pkg>#<commit-sha>` and resolved by `yarn install` — there is no sibling-checkout requirement. Yarn 4.15 (Corepack-managed via the `packageManager` field) fetches each pinned commit, runs its `prepack: tsc`, and caches the resulting tarball in `yarn.lock`.
 
-First-time bootstrap on a fresh machine (works on macOS, Linux, and Windows; needs Node 18+ and Git):
+First-time bootstrap (macOS, Linux, Windows; needs Node 18+ and Git):
 
 ```sh
-mkdir -p ~/data/local/repos/NEARBYTES
-cd ~/data/local/repos/NEARBYTES
 git clone https://github.com/nearbytes/nearbytes-files.git
-node nearbytes-files/scripts/update.mjs
+cd nearbytes-files
+yarn install
+yarn repl
 ```
 
-Thereafter — every time anything in any Nearbytes repo's `main` moved — just run:
+That's it — no other Nearbytes repos need to be checked out locally.
+
+When something in another Nearbytes repo's `main` moves, refresh internal deps to the latest published commits:
 
 ```sh
 yarn update
 ```
 
-That's the only command you ever need. After it finishes, plain `yarn run repl`, `yarn nbf -- <args>`, `yarn build`, etc. in any of the repos works as expected.
+This bumps every `github:nearbytes/<pkg>#<sha>` entry in `package.json` to the current HEAD of its `main` branch on GitHub and re-runs `yarn install`. Commit the resulting `package.json` + `yarn.lock` to publish the new combination.
 
-The script reads `NEARBYTES_ROOT` (default: the parent dir of the script) and operates on the sibling repos `nearbytes-{crypto,log,sync,skeleton,files,benchmarks}`.
+When pushing changes to multiple Nearbytes repos at once, run `yarn update` + `git commit` + `git push` in each downstream repo in topological order: `nearbytes-crypto → log → sync → skeleton → files → benchmarks`.
 
 ## CLI (`nbf`)
 
@@ -121,4 +123,4 @@ Main exports: `FileService`, `createFileService`, volume replay (`openVolume`, `
 
 ## Install as dependency
 
-This package isn't published to npm. Other repos in the Nearbytes set consume it via `file:../nearbytes-files`; see `update.sh` for the canonical sibling-checkout layout.
+This package isn't published to npm. Other repos in the Nearbytes set consume it via `github:nearbytes/nearbytes-files#<commit-sha>` pinned in their `package.json`, with `yarn.lock` committed alongside.

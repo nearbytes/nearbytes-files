@@ -1,5 +1,0 @@
-{
-  "remoteHost": "pc-ciancia",
-  "sshConnectTimeoutSec": 10,
-  "e2eWorkDir": ".local/e2e/work"
-}

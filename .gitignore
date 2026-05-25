@@ -4,14 +4,7 @@ package-lock.json
 .yarn/install-state.gz
 .yarn/cache/
 
-# Local runtime, benchmarks, e2e workdirs (see config/e2e.local.example.json)
+# Local runtime artefacts
 .local/**
 !.local/
 !.local/.gitkeep
-
-# Legacy benchmark dirs (scripts now write under .local/bench/)
-benchmark-output/
-benchmark-output-*/
-
-# Machine-specific e2e / remote host config (copy from e2e.local.example.json)
-config/e2e.local.json

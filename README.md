@@ -105,17 +105,6 @@ const data = await files.getFile('myvol:password', meta.blobHash);
 
 Main exports: `FileService`, `createFileService`, volume replay (`openVolume`, `materializeVolume`, `replayEvents`), file crypto helpers, reference bundles, and types (`FileMetadata`, `VolumeFileSystemState`, …).
 
-## Testing
-
-| Script | What it does |
-|--------|----------------|
-| `yarn e2e:bidirectional:local` | Bidirectional 1 MiB friend-sync smoke + hash verify (~12s wall) |
-| `yarn test:sync-bidirectional:local` | Same as above |
-
-Performance benchmarks and paper campaigns live in **`nearbytes-benchmarks`** (sibling repo).
-
-Requires sibling packages built (`nearbytes-log`, `nearbytes-sync` via `nearbytes-skeleton`). Run `yarn build` before e2e.
-
 ## Install as dependency
 
 ```sh

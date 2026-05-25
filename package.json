@@ -42,11 +42,7 @@
     "type-check": "tsc --noEmit",
     "prepare": "tsc",
     "nbf": "node dist/cli/index.js",
-    "repl": "node dist/cli/index.js repl",
-    "e2e:bidirectional:local": "node tests/e2e/sync-bidirectional-local.mjs",
-    "test:sync-bidirectional": "node dist/scripts/sync-bidirectional-test.js",
-    "test:sync-bidirectional:local": "yarn e2e:bidirectional:local",
-    "test:sync-bidirectional:remote": "bash scripts/run-sync-bidirectional-remote.sh"
+    "repl": "node dist/cli/index.js repl"
   },
   "license": "MIT",
   "engines": {

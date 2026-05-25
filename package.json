@@ -40,8 +40,9 @@
   "scripts": {
     "build": "tsc",
     "type-check": "tsc --noEmit",
-    "nbf": "node dist/cli/index.js",
-    "repl": "node dist/cli/index.js repl"
+    "nbf": "tsc && node dist/cli/index.js",
+    "repl": "tsc && node dist/cli/index.js repl",
+    "prepare": "tsc"
   },
   "license": "MIT",
   "engines": {

@@ -38,11 +38,11 @@ async function addFileWithDeps(secret, filename, data, mimeType, crypto, channel
     const normalizedSecret = normalizeSecret(secret);
     const keyPair = await crypto.deriveKeys(normalizedSecret);
     const encrypted = await encryptFileForVolume(crypto, keyPair.privateKey, data);
-    await channelStorage.blocks.store(encrypted.blobHash, encrypted.encryptedData, true);
+    const blobHash = await channelStorage.blocks.store(encrypted.encryptedData, true);
     const createdAt = now();
     await appendCreateEvent(channelStorage, crypto, keyPair, {
         filename,
-        blobHash: encrypted.blobHash,
+        blobHash,
         encryptedKey: encrypted.encryptedKey,
         contentType: encrypted.contentType,
         mimeType,
@@ -50,7 +50,7 @@ async function addFileWithDeps(secret, filename, data, mimeType, crypto, channel
     });
     return {
         filename,
-        blobHash: encrypted.blobHash,
+        blobHash,
         contentType: encrypted.contentType,
         size: data.length,
         mimeType,
@@ -699,10 +699,10 @@ async function upgradeLegacyFilesForExport(filenames, files, keyPair, crypto, ch
         const encryptedData = await channelStorage.blocks.retrieve(file.blobHash);
         const plaintext = await decryptFileForVolume(crypto, keyPair.privateKey, encryptedData, file.encryptedKey);
         const encrypted = await encryptFileForVolume(crypto, keyPair.privateKey, plaintext);
-        await channelStorage.blocks.store(encrypted.blobHash, encrypted.encryptedData, true);
+        const blobHash = await channelStorage.blocks.store(encrypted.encryptedData, true);
         await appendCreateEvent(channelStorage, crypto, keyPair, {
             filename: file.filename,
-            blobHash: encrypted.blobHash,
+            blobHash,
             encryptedKey: encrypted.encryptedKey,
             contentType: encrypted.contentType,
             mimeType: file.mimeType,
@@ -745,8 +745,12 @@ async function importSourceBundleItems(bundle, existingFiles, entries, destinati
     return imported;
 }
 async function ensureDestinationBlockAvailable(channelStorage, blobHash) {
+    // We retrieve from one destination (which verifies the digest by default,
+    // see Log.blocks.retrieve), then mirror to another destination. The bytes
+    // have just been verified to match `blobHash`, so we use the streaming
+    // fast path (`storeAlreadyVerified`) to avoid a second SHA-256 pass.
     const encryptedData = await channelStorage.blocks.retrieve(blobHash);
-    await channelStorage.blocks.store(blobHash, encryptedData, false);
+    await channelStorage.blocks.storeAlreadyVerified(blobHash, encryptedData, false);
 }
 function nextCreateTimestamp(entries, fallbackNow) {
     const timeline = mapEntriesToTimeline([...entries]);

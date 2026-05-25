@@ -10,10 +10,10 @@ const EC_P256_PUBLIC_KEY_BYTES = 65;
 export async function encryptFileForVolume(crypto, volumePrivateKey, data) {
     const fileKey = await crypto.generateSymmetricKey();
     const encryptedData = await crypto.encryptSym(data, fileKey);
-    const blobHash = await crypto.computeHash(encryptedData);
     const encryptedKey = await wrapFileKeyForVolume(crypto, volumePrivateKey, fileKey);
+    // The encrypted block's content-address is owned by the log; callers
+    // obtain the `blobHash` from `Log.blocks.store(encryptedData, ...)`.
     return {
-        blobHash,
         encryptedData,
         encryptedKey,
         contentType: 'b',

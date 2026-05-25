@@ -1,9 +1,8 @@
 import type { CryptoOperations } from 'nearbytes-crypto';
-import type { EncryptedData, Hash } from 'nearbytes-crypto';
+import type { EncryptedData } from 'nearbytes-crypto';
 import type { PrivateKey, PublicKey, SymmetricKey } from 'nearbytes-crypto';
 import type { ContentDescriptor } from './fileReferenceCodec.js';
 export interface EncryptedFileWrite {
-    readonly blobHash: Hash;
     readonly encryptedData: EncryptedData;
     readonly encryptedKey: EncryptedData;
     readonly contentType: 'b';

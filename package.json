@@ -41,8 +41,7 @@
     "build": "tsc",
     "type-check": "tsc --noEmit",
     "nbf": "node dist/cli/index.js",
-    "repl": "node dist/cli/index.js repl",
-    "postinstall": "tsc"
+    "repl": "node dist/cli/index.js repl"
   },
   "license": "MIT",
   "engines": {

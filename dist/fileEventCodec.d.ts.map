@@ -1,0 +1,1 @@
+{"version":3,"file":"fileEventCodec.d.ts","sourceRoot":"","sources":["../src/fileEventCodec.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,SAAS,EAAE,MAAM,iBAAiB,CAAC;AAEjD;;;;;GAKG;AACH,wBAAgB,eAAe,CAAC,KAAK,EAAE,SAAS,GAAG,UAAU,CAM5D;AAED;;;;;GAKG;AACH,wBAAgB,eAAe,CAAC,IAAI,EAAE,UAAU,GAAG,SAAS,CAc3D;AAED;;;;GAIG;AACH,wBAAgB,WAAW,CAAC,GAAG,EAAE,OAAO,GAAG,GAAG,IAAI,SAAS,CA4B1D"}

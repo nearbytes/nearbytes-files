@@ -8,3 +8,4 @@ package-lock.json
 .local/**
 !.local/
 !.local/.gitkeep
+dist/

@@ -56,27 +56,80 @@ import { installReplInterruptHandlers } from './replTerminal.js';
 // Tokeniser
 // ---------------------------------------------------------------------------
 
+/**
+ * Shell-style tokenizer.
+ *
+ * Splits a REPL input line into argv tokens with bash-like rules:
+ *
+ *   - Single-quoted strings are taken literally; backslashes inside them
+ *     are not escapes (`'a\b'` -> `a\b`).
+ *   - Double-quoted strings allow `\"`, `\\`, `` \` ``, and `\$` escapes;
+ *     other backslashes are kept literal (bash semantics).
+ *   - Outside any quote, an unescaped backslash escapes the next character
+ *     (so `foo\ bar` -> the single token `foo bar`; `\\` -> `\`).
+ *   - An empty quoted string (`""` or `''`) still produces an empty token.
+ *   - Unterminated quotes raise an error rather than swallowing the rest
+ *     of the line silently.
+ *
+ * This matches what users get from bash/zsh when they tab-complete a path
+ * with spaces (`Downloads/WhatsApp\ Image\ …`) or paste a quoted path.
+ */
 function tokenise(line: string): string[] {
-  // Basic shell-like split: honour "quoted strings"
   const tokens: string[] = [];
   let current = '';
-  let inQuote = false;
-  let quoteChar = '';
+  let hasToken = false;
+  let inQuote: '"' | "'" | null = null;
 
-  for (const ch of line.trim()) {
-    if (inQuote) {
-      if (ch === quoteChar) { inQuote = false; }
-      else { current += ch; }
-    } else if (ch === '"' || ch === "'") {
-      inQuote = true;
-      quoteChar = ch;
-    } else if (ch === ' ' || ch === '\t') {
-      if (current.length > 0) { tokens.push(current); current = ''; }
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (inQuote === "'") {
+      if (ch === "'") {
+        inQuote = null;
+      } else {
+        current += ch;
+        hasToken = true;
+      }
+    } else if (inQuote === '"') {
+      if (ch === '\\' && i + 1 < line.length) {
+        const next = line[i + 1]!;
+        if (next === '"' || next === '\\' || next === '$' || next === '`') {
+          current += next;
+          i += 1;
+        } else {
+          current += ch;
+        }
+        hasToken = true;
+      } else if (ch === '"') {
+        inQuote = null;
+      } else {
+        current += ch;
+        hasToken = true;
+      }
     } else {
-      current += ch;
+      if (ch === '\\' && i + 1 < line.length) {
+        current += line[i + 1]!;
+        i += 1;
+        hasToken = true;
+      } else if (ch === '"' || ch === "'") {
+        inQuote = ch as '"' | "'";
+        hasToken = true;
+      } else if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
+        if (hasToken) {
+          tokens.push(current);
+          current = '';
+          hasToken = false;
+        }
+      } else {
+        current += ch;
+        hasToken = true;
+      }
     }
   }
-  if (current.length > 0) tokens.push(current);
+
+  if (inQuote !== null) {
+    throw new Error(`Unterminated ${inQuote === '"' ? 'double' : 'single'} quote in input`);
+  }
+  if (hasToken) tokens.push(current);
   return tokens;
 }
 

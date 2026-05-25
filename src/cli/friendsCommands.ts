@@ -1,4 +1,4 @@
-import { green, dim, bold } from './output.js';
+import { green, dim, bold, yellow } from './output.js';
 import type { Context } from './context.js';
 import { matchFriendKey, normalizeFriendPublicKey, persistConfig } from './configStore.js';
 
@@ -20,9 +20,18 @@ export async function cmdFriendAdd(ctx: Context, publicKey: string): Promise<voi
     return;
   }
   const friends = [...ctx.config.friends, pk];
+  const syncWasOffline = !ctx.config.profileSecret;
   await persistConfig(ctx, { ...ctx.config, friends });
   console.log(green(`✓ Following ${pk}`));
-  console.log(dim('  Sync is active for this session (reloaded).'));
+  if (syncWasOffline) {
+    console.log(
+      yellow('  ! Sync is offline (no profile identity) — run ') +
+        bold('profile init <secret>') +
+        yellow(' to activate it.'),
+    );
+  } else {
+    console.log(dim('  Sync is active for this session (reloaded).'));
+  }
 }
 
 export async function cmdFriendRemove(ctx: Context, prefixOrKey: string): Promise<void> {

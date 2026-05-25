@@ -16,7 +16,7 @@
  *   file rm readme.txt
  */
 import * as readline from 'readline';
-import { cyan, dim, red, bold } from './output.js';
+import { cyan, dim, red, bold, yellow } from './output.js';
 import { cmdSetup, cmdVolumeOpen, cmdVolumeInfo, cmdUse, cmdVolumes, cmdFileAdd, cmdFileList, cmdFileGet, cmdFileRemove, cmdRefresh, cmdTimeline, cmdHelp, cmdFriendList, cmdFriendAdd, cmdFriendRemove, cmdFriendShow, cmdProfileInit, cmdProfileShow, cmdProfilePublish, } from './commands.js';
 import { createReplCompleter } from './replCompleter.js';
 import { loadReplHistory, createReplHistorySession, attachReverseSearch, REPL_HISTORY_MAX_ENTRIES, } from './replHistory.js';
@@ -270,6 +270,13 @@ export async function startRepl(ctx) {
     console.log(bold('Nearbytes REPL') +
         dim(' — Tab complete, ↑↓ history, ^R search, ^C cancel line, ^D exit'));
     console.log(dim(`  History: ${historySession.lines.length} entries (saved on exit)`));
+    if (!ctx.config.profileSecret) {
+        console.log('');
+        console.log(yellow('  ! No profile identity configured — sync is offline.'));
+        console.log(dim('    Run ') +
+            bold('profile init <secret>') +
+            dim(' to declare your identity; sync activates automatically once it is saved.'));
+    }
     console.log('');
     // If the user pre-configured volumes in config, open them now.
     for (const vc of ctx.config.volumes) {

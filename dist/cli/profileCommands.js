@@ -4,11 +4,15 @@ import { createIdentityRecord, serializeIdentityRecord, verifyIdentityRecord, } 
 import { green, dim, bold, cyan } from './output.js';
 import { persistConfig } from './configStore.js';
 export async function cmdProfileInit(ctx, profileSecret) {
+    const wasOffline = !ctx.config.profileSecret;
     const keyPair = await ctx.skeleton.crypto.deriveKeys(createSecret(profileSecret));
     const publicKey = bytesToHex(keyPair.publicKey);
     await persistConfig(ctx, { ...ctx.config, profileSecret });
     console.log(green('✓ Profile secret saved to config'));
     console.log(`${bold('Profile public key:')} ${publicKey}`);
+    if (wasOffline) {
+        console.log(green('✓ Sync activated — discovery + friend carriage are now live.'));
+    }
     console.log(dim('  This is your sync identity — share it for `friend add`. Run `profile publish` to write a display name to the log.'));
 }
 export async function cmdProfileShow(ctx) {

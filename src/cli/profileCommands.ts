@@ -11,11 +11,15 @@ import type { Context } from './context.js';
 import { persistConfig } from './configStore.js';
 
 export async function cmdProfileInit(ctx: Context, profileSecret: string): Promise<void> {
+  const wasOffline = !ctx.config.profileSecret;
   const keyPair = await ctx.skeleton.crypto.deriveKeys(createSecret(profileSecret));
   const publicKey = bytesToHex(keyPair.publicKey);
   await persistConfig(ctx, { ...ctx.config, profileSecret });
   console.log(green('✓ Profile secret saved to config'));
   console.log(`${bold('Profile public key:')} ${publicKey}`);
+  if (wasOffline) {
+    console.log(green('✓ Sync activated — discovery + friend carriage are now live.'));
+  }
   console.log(dim('  This is your sync identity — share it for `friend add`. Run `profile publish` to write a display name to the log.'));
 }
 

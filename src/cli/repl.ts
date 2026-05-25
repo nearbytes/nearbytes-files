@@ -17,7 +17,7 @@
  */
 
 import * as readline from 'readline';
-import { cyan, dim, red, bold } from './output.js';
+import { cyan, dim, red, bold, yellow } from './output.js';
 import {
   cmdSetup,
   cmdVolumeOpen,
@@ -297,6 +297,15 @@ export async function startRepl(ctx: Context): Promise<void> {
       dim(' — Tab complete, ↑↓ history, ^R search, ^C cancel line, ^D exit'),
   );
   console.log(dim(`  History: ${historySession.lines.length} entries (saved on exit)`));
+  if (!ctx.config.profileSecret) {
+    console.log('');
+    console.log(yellow('  ! No profile identity configured — sync is offline.'));
+    console.log(
+      dim('    Run ') +
+        bold('profile init <secret>') +
+        dim(' to declare your identity; sync activates automatically once it is saved.'),
+    );
+  }
   console.log('');
 
   // If the user pre-configured volumes in config, open them now.

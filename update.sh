@@ -67,6 +67,16 @@ done
 
 echo
 echo "== yarn install + yarn build (topological order) =="
+# If the user has a stray ~/package.json + ~/yarn.lock (or any parent
+# project above $ROOT), Yarn auto-discovers it and refuses to install
+# in a child dir unless that child has its own lockfile to mark a fresh
+# project boundary. Touch an empty yarn.lock in each repo to make every
+# install hermetic regardless of the environment above $ROOT.
+for r in "${BUILD_ORDER[@]}" nearbytes-benchmarks ; do
+  [ -d "$ROOT/$r" ] || continue
+  [ -f "$ROOT/$r/yarn.lock" ] || : > "$ROOT/$r/yarn.lock"
+done
+
 for r in "${BUILD_ORDER[@]}"; do
   echo "-- $r --"
   cd "$ROOT/$r"

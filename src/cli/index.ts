@@ -368,10 +368,12 @@ friendCmd
 // ── default action + parse ────────────────────────────────────────────────
 //
 // When the user runs `nbf` (or `nbf -d /tmp/x`) with no subcommand, drop
-// into the REPL. This is what makes `yarn repl -- -d /tmp/x` work after the
-// matching package.json change that dropped the hard-coded `repl` token
-// from the script line — yarn appends extra args to the END, so we can no
-// longer rely on having `repl` precede the flags.
+// into the REPL. Together with the matching package.json change that
+// dropped the hard-coded `repl` token from the script line, this makes
+// `yarn repl -d /tmp/x` (note: WITHOUT the `--` separator — Yarn 4
+// forwards `--` literally, where Commander reads it as POSIX end-of-
+// options and silently drops the flag) route through the default action
+// with the correct dataDir.
 
 program.action(runRepl);
 program.parse();

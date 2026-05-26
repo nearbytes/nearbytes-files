@@ -34,13 +34,15 @@ When pushing changes to multiple Nearbytes repos at once, run `yarn update` + `g
 | Command | What it does |
 |---------|----------------|
 | `yarn repl` | Interactive REPL (no subcommand → REPL is the default) |
-| `yarn repl -- -d <dir>` | REPL against a custom data directory |
-| `yarn nbf -- <args>` | One-shot command (e.g. `yarn nbf -- file list -s "myvol:pass"`) |
-| `yarn nbf -- -d <dir> <subcmd>` | Any subcommand against a custom data directory |
+| `yarn repl -d <dir>` | REPL against a custom data directory |
+| `yarn nbf <args>` | One-shot command (e.g. `yarn nbf file list -s "myvol:pass"`) |
+| `yarn nbf -d <dir> <subcmd>` | Any subcommand against a custom data directory |
 | `yarn nbf repl` | Same as `yarn repl` |
 | `npx nbf …` | After install, if the `nbf` bin is linked |
 
 Global flags (`-c <config>`, `-d <data-dir>`) must precede the subcommand (or be passed alone for the REPL default).
+
+> **Yarn 4 note:** do **not** use `--` between the script name and the args (e.g. `yarn repl -- -d /tmp/foo`). Yarn 4 forwards `--` literally to the node process, where Commander reads it as the POSIX end-of-options sentinel and treats `-d /tmp/foo` as positional args, so the flag is silently dropped. Just drop the `--`: `yarn repl -d /tmp/foo`. The old `npm`-style `-- <args>` separator is unnecessary on Yarn 4.
 
 ### Secrets
 
@@ -105,12 +107,12 @@ After `volume open`, file commands use the active volume (no `-s` needed). `time
 ### One-shot examples
 
 ```sh
-yarn nbf -- setup -s "myvol:password"
-yarn nbf -- volume open -s "myvol:password"
-yarn nbf -- file add -p ./hello.txt -s "myvol:password"
-yarn nbf -- file list -s "myvol:password"
-yarn nbf -- timeline -s "myvol:password"
-yarn nbf -- file get -n hello.txt -o /tmp/hello.txt -s "myvol:password"
+yarn nbf setup -s "myvol:password"
+yarn nbf volume open -s "myvol:password"
+yarn nbf file add -p ./hello.txt -s "myvol:password"
+yarn nbf file list -s "myvol:password"
+yarn nbf timeline -s "myvol:password"
+yarn nbf file get -n hello.txt -o /tmp/hello.txt -s "myvol:password"
 ```
 
 ## Library

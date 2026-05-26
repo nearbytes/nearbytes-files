@@ -630,13 +630,54 @@ export interface FlushOptions {
  * destroy() immediately and warns about anything still in flight.
  */
 export async function flushAndStop(ctx: Context, opts: FlushOptions = {}): Promise<void> {
-  const maxMs = opts.maxMs ?? 10000;
+  /**
+   * Drain predicate, expressed precisely:
+   *
+   *   "DRAINED" iff (everSawPeer ∨ writerOnly)
+   *               ∧ inflight === 0
+   *               ∧ now − lastBusyAt ≥ QUIET_MS
+   *
+   * where
+   *   - everSawPeer:    snapshot.connectedPeers has been > 0 at least once
+   *                     since this flush started.
+   *   - writerOnly:     we are running alongside a daemon (skeleton returned
+   *                     a writer-only SyncHandle); no peer will ever appear
+   *                     in this process — the daemon does the network work
+   *                     and propagates our writes via the dataDir watcher
+   *                     (DISC-27.4). Treat as drained immediately.
+   *   - inflight:       inflightInbound + inflightOutbound
+   *   - lastBusyAt:     reset on (a) inflight > 0 and (b) peer-count
+   *                     deltas, so a fresh peer connection restarts the
+   *                     quiet window and gives the protocol roundtrip
+   *                     (`have` → `want` → `data`) time to fire.
+   *
+   * Without the everSawPeer gate, a one-shot like `nbf file add` against a
+   * fresh dataDir trivially satisfies `inflight === 0` from t=0 (no peer
+   * connected, nothing to send) and exits before the swarm even bootstraps.
+   * We saw exactly this failure mode in the previous test run.
+   *
+   * The total budget is `maxMs` (default 15s). On WAN, Hyperswarm typically
+   * finds the first peer within 5–15s; on LAN, mDNS is sub-second. For
+   * pathological networks where no peer is reachable, the budget fires and
+   * we emit a "no peer found" warning — the local writes are durable and
+   * will be picked up by any future sync.
+   */
+  const maxMs = opts.maxMs ?? 15000;
   const QUIET_MS = 1000;
   const POLL_MS = 256;
   const started = Date.now();
   let lastBusyAt = started;
+  let everSawPeer = false;
+  let lastPeerCount = 0;
   let lastLineLen = 0;
   const tty = process.stdout.isTTY === true;
+
+  // Writer-only detection: skeleton's makeWriterOnlySync attaches a
+  // `daemon` property to the SyncHandle. When present, no peer will ever
+  // appear in this process and the drain predicate degenerates to "just
+  // call destroy".
+  const writerOnly =
+    (ctx.skeleton.sync as { daemon?: unknown }).daemon !== undefined;
 
   const writeStatus = (text: string): void => {
     if (!tty) {
@@ -653,6 +694,14 @@ export async function flushAndStop(ctx: Context, opts: FlushOptions = {}): Promi
     }
   };
 
+  if (writerOnly) {
+    process.stdout.write(
+      dim(`Sync is owned by a running daemon — writes propagated via dataDir watcher.\n`),
+    );
+    await ctx.destroy();
+    return;
+  }
+
   process.stdout.write(
     dim(`Flushing sync — waiting for in-flight transfers to drain (^C to abort)\n`),
   );
@@ -665,6 +714,15 @@ export async function flushAndStop(ctx: Context, opts: FlushOptions = {}): Promi
       break;
     }
     const snap = ctx.skeleton.sync.snapshot();
+
+    if (snap.connectedPeers > 0) everSawPeer = true;
+    // Peer-count deltas count as busy events so the QUIET_MS window
+    // restarts when a peer arrives — gives the `have`/`want`/`data`
+    // roundtrip time to fire before we declare drained.
+    if (snap.connectedPeers !== lastPeerCount) {
+      lastBusyAt = Date.now();
+      lastPeerCount = snap.connectedPeers;
+    }
     const busy = snap.inflightInbound + snap.inflightOutbound;
     if (busy > 0) lastBusyAt = Date.now();
     lastSnap = snap;
@@ -673,12 +731,18 @@ export async function flushAndStop(ctx: Context, opts: FlushOptions = {}): Promi
     const sinceQuiet = Date.now() - lastBusyAt;
     writeStatus(
       `  ${dim(`[${(elapsed / 1000).toFixed(1)}s]`)} ` +
+        `peers ${bold(String(snap.connectedPeers))} · ` +
         `in ${bold(String(snap.inflightInbound))} · ` +
         `out ${bold(String(snap.inflightOutbound))}` +
-        (busy === 0 ? dim(`  quiet for ${(sinceQuiet / 1000).toFixed(1)}s / ${(QUIET_MS / 1000).toFixed(1)}s`) : ''),
+        (busy === 0
+          ? dim(
+              `  ${everSawPeer ? 'quiet' : 'waiting for peer'} ` +
+                `${(sinceQuiet / 1000).toFixed(1)}s / ${(QUIET_MS / 1000).toFixed(1)}s`,
+            )
+          : ''),
     );
 
-    if (busy === 0 && sinceQuiet >= QUIET_MS) break;
+    if (everSawPeer && busy === 0 && sinceQuiet >= QUIET_MS) break;
     if (elapsed >= maxMs) break;
 
     await sleep(POLL_MS);
@@ -694,10 +758,16 @@ export async function flushAndStop(ctx: Context, opts: FlushOptions = {}): Promi
         `  ! aborted after ${elapsed}s — ${remaining} transfer(s) may not have completed; peers will retry`,
       ),
     );
+  } else if (!everSawPeer) {
+    console.log(
+      yellow(
+        `  ! no peer found within ${elapsed}s — write is durable locally; will be picked up by any future sync`,
+      ),
+    );
   } else {
     const busy = lastSnap.inflightInbound + lastSnap.inflightOutbound;
     if (busy === 0) {
-      console.log(green(`✓ Sync flushed in ${elapsed}s`));
+      console.log(green(`✓ Sync flushed in ${elapsed}s (peers: ${lastSnap.connectedPeers})`));
     } else {
       console.log(
         yellow(

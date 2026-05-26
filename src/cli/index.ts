@@ -24,6 +24,7 @@ import {
   cmdFileGet,
   cmdFileRemove,
   cmdTimeline,
+  flushAndStop,
   cmdFriendList,
   cmdFriendAdd,
   cmdFriendRemove,
@@ -89,7 +90,10 @@ program
     const gopts = program.opts<{ config?: string; dataDir: string }>();
     const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
-    await bail(() => cmdSetup(ctx, opts.secret));
+    await bail(async () => {
+      await cmdSetup(ctx, opts.secret);
+      await ctx.destroy();
+    });
   });
 
 // ── volume ────────────────────────────────────────────────────────────────
@@ -104,7 +108,10 @@ volumeCmd
     const gopts = program.opts<{ config?: string; dataDir: string }>();
     const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
-    await bail(() => cmdVolumeOpen(ctx, opts.secret, false));
+    await bail(async () => {
+      await cmdVolumeOpen(ctx, opts.secret, false);
+      await ctx.destroy();
+    });
   });
 
 volumeCmd
@@ -132,7 +139,10 @@ program
     const gopts = program.opts<{ config?: string; dataDir: string }>();
     const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
-    await bail(() => cmdTimeline(ctx, opts.secret));
+    await bail(async () => {
+      await cmdTimeline(ctx, opts.secret);
+      await ctx.destroy();
+    });
   });
 
 // ── file ──────────────────────────────────────────────────────────────────
@@ -149,7 +159,10 @@ fileCmd
     const gopts = program.opts<{ config?: string; dataDir: string }>();
     const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
-    await bail(() => cmdFileAdd(ctx, opts.path, opts.secret, opts.name));
+    await bail(async () => {
+      await cmdFileAdd(ctx, opts.path, opts.secret, opts.name);
+      await flushAndStop(ctx);
+    });
   });
 
 fileCmd
@@ -161,7 +174,10 @@ fileCmd
     const gopts = program.opts<{ config?: string; dataDir: string }>();
     const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
-    await bail(() => cmdFileList(ctx, opts.secret));
+    await bail(async () => {
+      await cmdFileList(ctx, opts.secret);
+      await ctx.destroy();
+    });
   });
 
 fileCmd
@@ -174,7 +190,10 @@ fileCmd
     const gopts = program.opts<{ config?: string; dataDir: string }>();
     const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
-    await bail(() => cmdFileGet(ctx, opts.name, opts.secret, opts.output));
+    await bail(async () => {
+      await cmdFileGet(ctx, opts.name, opts.secret, opts.output);
+      await ctx.destroy();
+    });
   });
 
 fileCmd
@@ -187,7 +206,10 @@ fileCmd
     const gopts = program.opts<{ config?: string; dataDir: string }>();
     const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
-    await bail(() => cmdFileRemove(ctx, opts.name, opts.secret));
+    await bail(async () => {
+      await cmdFileRemove(ctx, opts.name, opts.secret);
+      await flushAndStop(ctx);
+    });
   });
 
 // ── profile ───────────────────────────────────────────────────────────────
@@ -265,7 +287,7 @@ profileCmd
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(async () => {
       await cmdProfilePublish(ctx, opts.name, opts.bio, opts.as);
-      await ctx.destroy();
+      await flushAndStop(ctx);
     });
   });
 

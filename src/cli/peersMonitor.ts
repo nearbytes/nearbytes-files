@@ -10,6 +10,7 @@
  * Both commands work in REPL mode and in one-shot mode (`nbf peers`).
  */
 
+import type * as readline from 'node:readline';
 import type { ConnectedPeer, SyncEvent, SyncSnapshot } from 'nearbytes-sync/node';
 import { readSyncStateBeacon } from 'nearbytes-sync/node';
 import type { Context } from './context.js';
@@ -100,9 +101,15 @@ function toRow(peer: ConnectedPeer, now: number): PeerRow {
   };
 }
 
-function renderPeerTable(rows: readonly PeerRow[]): string {
+/**
+ * Render a peer table as a `string[]` of lines (no embedded newlines).
+ * The sticky overlay needs line-by-line addressing so each row can be
+ * written at an absolute cursor position; the legacy one-shot
+ * `renderPeerTable` wrapper joins these lines back with `\n`.
+ */
+function renderPeerTableLines(rows: readonly PeerRow[]): string[] {
   if (rows.length === 0) {
-    return yellow('  (no peers connected)');
+    return [yellow('  (no peers connected)')];
   }
   const COL_NUM = 3;
   const COL_ROLE = 8;
@@ -139,7 +146,11 @@ function renderPeerTable(rows: readonly PeerRow[]): string {
       dim(r.label)
     );
   });
-  return [header, sep, ...body].join('\n');
+  return [header, sep, ...body];
+}
+
+function renderPeerTable(rows: readonly PeerRow[]): string {
+  return renderPeerTableLines(rows).join('\n');
 }
 
 function renderSummary(snap: SyncSnapshot, peerCount: number): string {
@@ -241,18 +252,21 @@ function fmtEvent(e: SyncEvent): string {
 }
 
 /**
- * Render the most-recent `maxRows` events as a vertical log, newest at
- * the bottom (the natural reading order — your eye lands on the latest
- * activity). An empty buffer renders a placeholder so the panel never
- * collapses to zero height between transfers.
+ * Render the most-recent `maxRows` events as a `string[]` of lines,
+ * newest at the bottom (the natural reading order — your eye lands on
+ * the latest activity). An empty buffer renders a single placeholder
+ * line so the panel never collapses to zero height between transfers.
  */
-function renderEventLog(events: readonly SyncEvent[], maxRows: number): string {
+function renderEventLogLines(events: readonly SyncEvent[], maxRows: number): string[] {
   if (events.length === 0) {
-    return dim('  (no events yet — waiting for peer activity)');
+    return [dim('  (no events yet — waiting for peer activity)')];
   }
   const start = Math.max(0, events.length - maxRows);
-  const rows = events.slice(start).map((e) => '  ' + fmtEvent(e));
-  return rows.join('\n');
+  return events.slice(start).map((e) => '  ' + fmtEvent(e));
+}
+
+function renderEventLog(events: readonly SyncEvent[], maxRows: number): string {
+  return renderEventLogLines(events, maxRows).join('\n');
 }
 
 // ── monitor state source ──────────────────────────────────────────────────
@@ -399,42 +413,312 @@ export async function cmdPeers(ctx: Context): Promise<void> {
   console.log('');
 }
 
-// ── monitor (live panel) ──────────────────────────────────────────────────
+// ── monitor (sticky overlay + legacy fullscreen fallback) ─────────────────
 
-interface MonitorOptions {
-  /** Tick interval in milliseconds. Default 500 ms. */
-  readonly intervalMs?: number;
+/**
+ * Compose the sticky pane content as exactly `height` lines, padded
+ * with blank rows when the natural content is shorter. The composer
+ * NEVER overflows the budget — overlong content is truncated. This
+ * gives the redraw loop a hard upper bound on the rows it touches so
+ * scroll-region clipping always works correctly.
+ *
+ * Layout (height ≥ 12):
+ *   row 1 : title bar (mode · summary · clock)
+ *   row 2 : separator
+ *   row 3 : peer-table header
+ *   row 4 : peer-table separator
+ *   rows 5..K : peer rows (variable, ≤ MAX_PEER_ROWS)
+ *   row K+1 : blank
+ *   row K+2 : "Recent activity" subhead
+ *   row K+3 : separator
+ *   rows K+4..height : event log (newest at bottom)
+ */
+function renderStickyPaneLines(
+  state: MonitorState,
+  height: number,
+  cols: number,
+): string[] {
+  const now = Date.now();
+  const rows = state.peers.map((p) => toRow(p, now));
+
+  const title =
+    bold(' Nearbytes monitor ') +
+    dim('─ ') +
+    describeMode(state) +
+    dim(' ─ ') +
+    renderSummary(state.snapshot, state.peers.length) +
+    dim(' ─ ') +
+    dim(new Date().toLocaleTimeString());
+  const visibleLen = (title.match(/[^\x1b]/g) || []).length;
+  const trail = dim(' ' + '─'.repeat(Math.max(0, cols - visibleLen - 1)));
+
+  const lines: string[] = [];
+  lines.push(title + trail);
+
+  // Peer table (cap so the events region keeps at least 3 rows).
+  const PEER_TABLE_OVERHEAD = 2; // header + separator
+  const ACTIVITY_OVERHEAD = 3; // blank + subhead + separator
+  const MIN_EVENT_ROWS = 3;
+  const peerBudget = Math.max(
+    0,
+    height - 1 /* title */ - PEER_TABLE_OVERHEAD - ACTIVITY_OVERHEAD - MIN_EVENT_ROWS,
+  );
+  const cappedRows = rows.slice(0, Math.max(1, peerBudget));
+  const peerLines = renderPeerTableLines(cappedRows);
+  for (const l of peerLines) lines.push(l);
+
+  // Blank + activity heading.
+  lines.push('');
+  lines.push(bold('  Recent activity'));
+  lines.push(dim('  ' + '─'.repeat(Math.max(20, cols - 4))));
+
+  // Whatever rows remain go to the event log.
+  const eventBudget = Math.max(1, height - lines.length);
+  const eventLines = renderEventLogLines(state.events, eventBudget);
+  for (const l of eventLines) lines.push(l);
+
+  // Pad / truncate to exactly `height`.
+  if (lines.length > height) lines.length = height;
+  while (lines.length < height) lines.push('');
+  return lines;
 }
 
 /**
- * Live htop-style monitor that redraws every `intervalMs` (default 500 ms)
- * until the user presses q, Enter, Esc, or ^C. Hides the cursor during the
- * session and restores it on exit; toggles raw mode only if stdin is a TTY
- * (no-op for pipes, so it stays safe in CI).
+ * Compute the sticky pane height for the current terminal size. We
+ * want the pane to feel substantial but never starve the REPL of
+ * scrolling room. Heuristic: take ~40% of the terminal, clamped to
+ * [12, 22] rows. The minimum 12 is the smallest layout that still
+ * fits the title + peer table + activity heading + 3 event lines.
+ */
+function computePaneHeight(termRows: number): number {
+  const ideal = Math.floor(termRows * 0.4);
+  return Math.max(12, Math.min(22, ideal));
+}
+
+interface StickyMonitorHandle {
+  /** Tear down the overlay: reset scroll region, clear pane, re-prompt. */
+  stop(): void;
+}
+
+const ANSI_RESET_SCROLL_REGION = '\x1b[r';
+const ANSI_SAVE_CURSOR = '\x1b7';
+const ANSI_RESTORE_CURSOR = '\x1b8';
+
+/** Module-singleton: only one sticky monitor at a time per process. */
+let activeStickyMonitor: StickyMonitorHandle | null = null;
+
+/**
+ * Mount a sticky monitor overlay anchored to the top N rows of the
+ * terminal, with the REPL continuing to operate in the rows below.
  *
- * Source of truth:
- *   - In normal mode: this process's own `sync.snapshot()` / `sync.peers()`.
- *   - In writer-only mode: the daemon's published beacon
- *     (`<dataDir>/.nearbytes-sync.state.json`). The title bar shows the
- *     source explicitly so the operator always knows what they are
- *     looking at.
+ * The implementation rests on three pieces of ANSI machinery:
  *
- * Implementation note: the monitor takes over the entire screen using
- * `\x1b[2J` + cursor-home; on exit it restores the cursor and prints a
- * brief "monitor closed" footer. We deliberately do NOT touch readline's
- * own buffers — the REPL's dispatch chain serialises commands so the
- * monitor is the only writer to stdout for its lifetime.
+ *   1. DECSTBM (`\x1b[<top>;<bottom>r`) — sets the *scrolling region*
+ *      of the terminal. Lines that fall outside the region stay fixed
+ *      when the inside scrolls; this is what keeps the pane locked at
+ *      the top while the REPL's output and prompt scroll naturally
+ *      underneath.
+ *
+ *   2. DECSC / DECRC (`\x1b7` / `\x1b8`) — save and restore the
+ *      cursor. The redraw loop saves the REPL's cursor position,
+ *      addresses each pane row absolutely with CUP, then restores so
+ *      the next keystroke / prompt-redraw lands where the user was
+ *      typing.
+ *
+ *   3. EL (`\x1b[2K`) — clear the entire current line before
+ *      rewriting it, so a shorter line in the new frame does not
+ *      leave debris from the previous frame.
+ *
+ * The pane height is a fraction of the terminal rows (see
+ * `computePaneHeight`), recomputed on SIGWINCH so a window resize
+ * does not break the layout.
+ *
+ * Cleanup is non-negotiable: stop() resets the scroll region, clears
+ * the pane rows, and asks readline to redraw its prompt. We also
+ * self-attach to `rl.on('close')` so a REPL exit while the overlay
+ * is up never leaves the user staring at a terminal with a tiny
+ * scroll region.
+ */
+function startStickyMonitor(
+  ctx: Context,
+  rl: readline.Interface,
+  intervalMs = 500,
+): StickyMonitorHandle {
+  const stdout = process.stdout;
+  let paneHeight = computePaneHeight(stdout.rows || 24);
+  let stopped = false;
+  let writing = false;
+
+  const setScrollRegion = (): void => {
+    const rows = stdout.rows || 24;
+    // Region must be 1-based and bottom > top; on a tiny terminal we
+    // fall back to "no overlay, just don't crash".
+    if (rows <= paneHeight + 1) {
+      stdout.write(ANSI_RESET_SCROLL_REGION);
+      return;
+    }
+    stdout.write(`\x1b[${paneHeight + 1};${rows}r`);
+  };
+
+  const clearPaneRows = (): void => {
+    for (let i = 1; i <= paneHeight; i++) {
+      stdout.write(`\x1b[${i};1H\x1b[2K`);
+    }
+  };
+
+  const draw = async (): Promise<void> => {
+    if (stopped || writing) return;
+    writing = true;
+    try {
+      const state = await readMonitorState(ctx);
+      const cols = stdout.columns || 80;
+      const lines = renderStickyPaneLines(state, paneHeight, cols);
+      stdout.write(ANSI_SAVE_CURSOR);
+      for (let i = 0; i < paneHeight; i++) {
+        stdout.write(`\x1b[${i + 1};1H\x1b[2K`);
+        stdout.write(lines[i] ?? '');
+      }
+      stdout.write(ANSI_RESTORE_CURSOR);
+    } finally {
+      writing = false;
+    }
+  };
+
+  // Initial setup: scroll the existing content up so the top rows are
+  // blank, set the scroll region, position the cursor below the pane,
+  // and prompt readline to redraw.
+  stdout.write('\x1b[2J');           // clear screen
+  stdout.write('\x1b[H');             // home
+  setScrollRegion();
+  stdout.write(`\x1b[${paneHeight + 1};1H`);
+  rl.prompt(true);
+
+  void draw();
+  const timer = setInterval(() => void draw(), intervalMs);
+  timer.unref();
+
+  const onResize = (): void => {
+    if (stopped) return;
+    paneHeight = computePaneHeight(stdout.rows || 24);
+    setScrollRegion();
+    void draw();
+    // The REPL's prompt-line position is implicit in readline's state;
+    // a redraw nudges it to re-flush inside the new region.
+    rl.prompt(true);
+  };
+  stdout.on('resize', onResize);
+
+  const stop = (): void => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(timer);
+    stdout.removeListener('resize', onResize);
+    rl.removeListener('close', stop);
+    stdout.write(ANSI_RESET_SCROLL_REGION);
+    stdout.write(ANSI_SAVE_CURSOR);
+    clearPaneRows();
+    stdout.write(ANSI_RESTORE_CURSOR);
+    rl.prompt(true);
+  };
+  // Self-cleanup on REPL exit so the overlay never outlives the
+  // readline session and confuses the next shell.
+  rl.once('close', stop);
+
+  return { stop };
+}
+
+export interface MonitorOptions {
+  /** Tick interval in milliseconds. Default 500 ms. */
+  readonly intervalMs?: number;
+  /**
+   * REPL handle. When provided AND the terminal is a TTY, `monitor`
+   * mounts the sticky overlay; when omitted (e.g. `nbf monitor`
+   * standalone, or piped invocation) it falls back to the legacy
+   * fullscreen monitor with key-driven exit.
+   */
+  readonly rl?: readline.Interface;
+  /**
+   * Sub-verb arguments controlling toggle behaviour. Accepts
+   *   `on`  / `start` / `+`  — force on
+   *   `off` / `stop`  / `-`  — force off
+   *   anything else (or empty) — toggle
+   */
+  readonly args?: readonly string[];
+}
+
+/**
+ * `monitor` command dispatcher.
+ *
+ * Three call modes:
+ *
+ *  1. REPL + TTY (opts.rl set, stdout/stdin TTY): sticky overlay.
+ *     The pane is mounted at the top of the terminal, the REPL
+ *     prompt stays at the bottom, and `monitor` becomes a toggle —
+ *     re-issuing `monitor` (or `monitor off`) tears the overlay down.
+ *
+ *  2. Standalone TTY (`nbf monitor`, no rl): legacy fullscreen mode
+ *     that takes over the entire screen until q/Enter/Esc/^C. There
+ *     is no REPL to coexist with, so the takeover is appropriate.
+ *
+ *  3. Non-TTY (pipes, CI): single-shot snapshot via `cmdPeers`. The
+ *     interactive overlay needs cursor addressing that pipes do not
+ *     support; the snapshot still answers "what's up right now?".
  */
 export async function cmdMonitor(ctx: Context, opts: MonitorOptions = {}): Promise<void> {
-  const intervalMs = opts.intervalMs ?? 500;
+  const args = opts.args ?? [];
+  const wantOn = args.some((a) => a === 'on' || a === 'start' || a === '+');
+  const wantOff = args.some((a) => a === 'off' || a === 'stop' || a === '-');
 
   const tty = process.stdout.isTTY === true && process.stdin.isTTY === true;
   if (!tty) {
-    // Falling back to a single snapshot is more useful than refusing entirely.
     await cmdPeers(ctx);
     return;
   }
 
+  // REPL mode: sticky overlay toggle.
+  if (opts.rl !== undefined) {
+    if (wantOff) {
+      if (activeStickyMonitor !== null) {
+        activeStickyMonitor.stop();
+        activeStickyMonitor = null;
+        console.log(dim('  monitor: off'));
+      } else {
+        console.log(dim('  monitor: already off'));
+      }
+      return;
+    }
+    if (wantOn) {
+      if (activeStickyMonitor !== null) {
+        console.log(dim('  monitor: already on'));
+        return;
+      }
+      activeStickyMonitor = startStickyMonitor(ctx, opts.rl, opts.intervalMs);
+      console.log(dim('  monitor: on  (use `monitor off` to hide)'));
+      return;
+    }
+    // Bare `monitor` → toggle.
+    if (activeStickyMonitor !== null) {
+      activeStickyMonitor.stop();
+      activeStickyMonitor = null;
+      console.log(dim('  monitor: off'));
+    } else {
+      activeStickyMonitor = startStickyMonitor(ctx, opts.rl, opts.intervalMs);
+      console.log(dim('  monitor: on  (use `monitor off` to hide)'));
+    }
+    return;
+  }
+
+  // Standalone (no REPL): legacy fullscreen takeover.
+  await cmdMonitorFullscreen(ctx, opts.intervalMs ?? 500);
+}
+
+/**
+ * Legacy fullscreen monitor for standalone `nbf monitor` invocations
+ * (no surrounding REPL). Takes over the entire screen and exits on
+ * q/Enter/Esc/^C/^D. Kept intact because there is no REPL to share
+ * the screen with — the takeover IS the right UX here.
+ */
+async function cmdMonitorFullscreen(ctx: Context, intervalMs: number): Promise<void> {
   const stdin = process.stdin;
   const stdout = process.stdout;
 
@@ -448,9 +732,16 @@ export async function cmdMonitor(ctx: Context, opts: MonitorOptions = {}): Promi
   stdout.write(ANSI.hideCursor);
 
   const onKey = (chunk: string): void => {
-    // q | Q | Enter | Esc | ^C | ^D → stop
     for (const ch of chunk) {
-      if (ch === 'q' || ch === 'Q' || ch === '\r' || ch === '\n' || ch === '\x1b' || ch === '\x03' || ch === '\x04') {
+      if (
+        ch === 'q' ||
+        ch === 'Q' ||
+        ch === '\r' ||
+        ch === '\n' ||
+        ch === '\x1b' ||
+        ch === '\x03' ||
+        ch === '\x04'
+      ) {
         stopReasons.byKey = ch;
         stopped = true;
         return;
@@ -468,41 +759,12 @@ export async function cmdMonitor(ctx: Context, opts: MonitorOptions = {}): Promi
 
   const draw = async (): Promise<void> => {
     const state = await readMonitorState(ctx);
-    const now = Date.now();
-    const rows = state.peers.map((p) => toRow(p, now));
     const cols = stdout.columns || 80;
-    const titleBar =
-      bold(' Nearbytes monitor ') +
-      dim('─ ') +
-      describeMode(state) +
-      dim(' ─ ') +
-      renderSummary(state.snapshot, state.peers.length) +
-      dim(' ─ ') +
-      dim(new Date().toLocaleTimeString());
-    const titleBarLen = (titleBar.match(/[^\x1b]/g) || []).length; // best-effort visible-length
-    const trail = '─'.repeat(Math.max(0, cols - titleBarLen - 1));
-    /**
-     * Event-log row budget: take what remains after the chrome we know
-     * we render (title + blanks + peer table + footer). For typical
-     * terminals (24+ rows) this yields a comfortable 10-line tail.
-     * If the terminal is short we shrink to a minimum of 3 rows so the
-     * activity panel never disappears entirely — better to have a
-     * smaller window than to crop it away on a tiny terminal.
-     */
-    const peerRowCount = Math.max(1, rows.length);
-    const peerTableHeight = peerRowCount + 2; // header + separator
-    const chromeHeight = 1 + 1 + peerTableHeight + 1 + 1 + 1 + 1 + 1 + 1;
-    const lines = stdout.rows || 24;
-    const eventRows = Math.max(3, Math.min(15, lines - chromeHeight));
+    const rowsTotal = stdout.rows || 24;
+    const lines = renderStickyPaneLines(state, Math.max(12, rowsTotal - 2), cols);
     stdout.write(ANSI.cursorHome);
     stdout.write(ANSI.clearToEndOfScreen);
-    stdout.write(titleBar + dim(' ' + trail) + '\n');
-    stdout.write('\n');
-    stdout.write(renderPeerTable(rows) + '\n');
-    stdout.write('\n');
-    stdout.write(bold('  Recent activity') + '\n');
-    stdout.write(dim('  ' + '─'.repeat(Math.max(20, cols - 4))) + '\n');
-    stdout.write(renderEventLog(state.events, eventRows) + '\n');
+    stdout.write(lines.join('\n') + '\n');
     stdout.write('\n');
     stdout.write(dim('  q · Enter · Esc · ^C   to exit') + '\n');
   };
@@ -524,7 +786,6 @@ export async function cmdMonitor(ctx: Context, opts: MonitorOptions = {}): Promi
     t.unref();
   });
 
-  // Restore terminal state.
   stdin.removeListener('data', onKey);
   process.removeListener('SIGINT', onSig);
   process.removeListener('SIGTERM', onSig);
@@ -533,8 +794,6 @@ export async function cmdMonitor(ctx: Context, opts: MonitorOptions = {}): Promi
   stdout.write(ANSI.showCursor);
   stdout.write('\n');
   if (stopReasons.bySignal === 'SIGINT') {
-    // Re-raise SIGINT semantics for the REPL: it will treat ^C as "abort
-    // current line", which is exactly the UX we want.
     console.log(red('  monitor interrupted (^C)'));
   } else {
     console.log(dim('  monitor closed'));

@@ -194,7 +194,7 @@ function resolveSecret(ctx: Context, override: string | undefined): string {
 // Dispatcher
 // ---------------------------------------------------------------------------
 
-async function dispatch(ctx: Context, tokens: string[]): Promise<void> {
+async function dispatch(ctx: Context, tokens: string[], rl: readline.Interface): Promise<void> {
   if (tokens.length === 0) return;
 
   /**
@@ -450,7 +450,14 @@ async function dispatch(ctx: Context, tokens: string[]): Promise<void> {
 
     case 'monitor':
     case 'top':
-      await cmdMonitor(ctx);
+      /**
+       * In the REPL we pass `rl` so the sticky overlay can mount
+       * above the prompt and toggle on/off as a side-effect of
+       * re-issuing `monitor`. `rest` carries any sub-verb (`on`,
+       * `off`, `start`, `stop`) so the user can disambiguate when
+       * the toggle would otherwise hide the panel they want to see.
+       */
+      await cmdMonitor(ctx, { rl, args: rest });
       return;
 
     case 'friend': {
@@ -581,7 +588,7 @@ export async function startRepl(ctx: Context): Promise<void> {
       }
 
       try {
-        await dispatch(ctx, tokens);
+        await dispatch(ctx, tokens, rl);
         rl.prompt();
       } catch (err) {
         if (err instanceof ExitReplSignal) {

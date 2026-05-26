@@ -866,7 +866,7 @@ ${cyan('Friends (asymmetric follow, shared across all profiles)')}
 
 ${cyan('Diagnostics (where is this block coming from?)')}
   peers                                  Snapshot of connected peers ${dim('(role, route, age, transport)')}
-  monitor ${dim('/ top')}                          Live htop-style panel; q/Enter/Esc/^C to exit
+  monitor ${dim('[on|off]')} ${dim('/ top')}                 Toggle sticky live panel above the prompt ${dim('(REPL)')}
 
 ${cyan('Session')}
   help                                   Show this message

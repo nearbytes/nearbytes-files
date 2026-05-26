@@ -79,6 +79,7 @@ const TOP_LEVEL = [
 const PROFILE_SUB = ['add', 'use', 'list', 'ls', 'show', 'publish', 'remove', 'rm'] as const;
 const FRIEND_SUB = ['list', 'ls', 'add', 'remove', 'rm', 'del', 'delete', 'show'] as const;
 const VOLUME_SUB = ['open', 'close', 'info', 'show'] as const;
+const MONITOR_SUB = ['on', 'off', 'start', 'stop'] as const;
 
 const SECRET_FLAGS = ['-s', '--secret'] as const;
 const DEST_FLAGS = ['-d', '--dest'] as const;
@@ -502,6 +503,13 @@ function suggest(ctx: Context, prefix: string[], partial: string): string[] {
       return [];
     }
 
+    case 'monitor':
+    case 'top': {
+      const [sub] = rest;
+      if (!sub) return filterByPartial([...MONITOR_SUB], partial);
+      return [];
+    }
+
     default:
       if (!lowerVerb) return filterByPartial([...TOP_LEVEL], partial);
       return suggestForFlatVerb(ctx, lowerVerb, rest, partial);
@@ -514,6 +522,7 @@ export const __vocab = {
   PROFILE_SUB,
   FRIEND_SUB,
   VOLUME_SUB,
+  MONITOR_SUB,
   REMOTE_NAME_VERBS,
   LOCAL_PATH_VERBS,
 };

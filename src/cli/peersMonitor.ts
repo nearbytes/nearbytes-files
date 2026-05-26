@@ -10,7 +10,7 @@
  * Both commands work in REPL mode and in one-shot mode (`nbf peers`).
  */
 
-import type { ConnectedPeer, SyncSnapshot } from 'nearbytes-sync/node';
+import type { ConnectedPeer, SyncEvent, SyncSnapshot } from 'nearbytes-sync/node';
 import { readSyncStateBeacon } from 'nearbytes-sync/node';
 import type { Context } from './context.js';
 import { bold, cyan, dim, green, yellow, red } from './output.js';
@@ -152,11 +152,121 @@ function renderSummary(snap: SyncSnapshot, peerCount: number): string {
   );
 }
 
+// ── event-log rendering ───────────────────────────────────────────────────
+
+/**
+ * Format an epoch-ms timestamp as `HH:MM:SS.mmm`. We display the
+ * milliseconds because sub-second activity is common during a
+ * single-block transfer and the ordering tells the operator whether
+ * "block sent" preceded or followed the corresponding "block received"
+ * on the other side.
+ */
+function fmtTime(at: number): string {
+  const d = new Date(at);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  const ms = String(d.getMilliseconds()).padStart(3, '0');
+  return `${hh}:${mm}:${ss}.${ms}`;
+}
+
+function fmtBytes(bytes: number): string {
+  if (bytes < 1_024) return `${bytes} B`;
+  if (bytes < 1_048_576) return `${(bytes / 1_024).toFixed(1)} KB`;
+  if (bytes < 1_073_741_824) return `${(bytes / 1_048_576).toFixed(1)} MB`;
+  return `${(bytes / 1_073_741_824).toFixed(2)} GB`;
+}
+
+/**
+ * Format a single event into a one-line, colour-coded log entry. The
+ * symbols are intentionally non-textual ("+", "−", "↑", "↓", "⊕") so a
+ * fast scan of the column shows direction even before the eye parses
+ * the verb. Hashes and peer-ids are truncated to 8 hex chars to fit in
+ * the column budget; the full identity lives in `peers` for forensics.
+ */
+function fmtEvent(e: SyncEvent): string {
+  const time = dim(fmtTime(e.at));
+  switch (e.kind) {
+    case 'peer-connected': {
+      const roleStr =
+        e.role === 'sibling' ? cyan('sibling') : yellow('friend ');
+      return (
+        time +
+        '  ' + green('+ peer connect   ') +
+        roleStr +
+        '  ' + e.remoteProfilePublicKey.slice(0, 8) +
+        '  ' + dim('via ') + dim(e.transportLabel)
+      );
+    }
+    case 'peer-disconnected': {
+      return (
+        time +
+        '  ' + red('− peer disconn.  ') +
+        dim('       ') +
+        '  ' + e.remoteProfilePublicKey.slice(0, 8) +
+        '  ' + dim('via ') + dim(e.transportLabel)
+      );
+    }
+    case 'block-sent': {
+      return (
+        time +
+        '  ' + cyan('↑ block sent     ') +
+        dim('       ') +
+        '  ' + e.blockHash.slice(0, 8) +
+        '  ' + dim('→ ') + e.toPeerId.slice(0, 8) +
+        '  ' + bold(fmtBytes(e.bytes))
+      );
+    }
+    case 'block-received': {
+      return (
+        time +
+        '  ' + green('↓ block recv     ') +
+        dim('       ') +
+        '  ' + e.blockHash.slice(0, 8) +
+        '  ' + dim('← ') + e.fromPeerId.slice(0, 8) +
+        '  ' + bold(fmtBytes(e.bytes))
+      );
+    }
+    case 'event-received': {
+      return (
+        time +
+        '  ' + yellow('⊕ event recv     ') +
+        dim('       ') +
+        '  ' + e.eventHash.slice(0, 8) +
+        '  ' + dim('← ') + e.fromPeerId.slice(0, 8) +
+        '  ' + dim(fmtBytes(e.bytes))
+      );
+    }
+  }
+}
+
+/**
+ * Render the most-recent `maxRows` events as a vertical log, newest at
+ * the bottom (the natural reading order — your eye lands on the latest
+ * activity). An empty buffer renders a placeholder so the panel never
+ * collapses to zero height between transfers.
+ */
+function renderEventLog(events: readonly SyncEvent[], maxRows: number): string {
+  if (events.length === 0) {
+    return dim('  (no events yet — waiting for peer activity)');
+  }
+  const start = Math.max(0, events.length - maxRows);
+  const rows = events.slice(start).map((e) => '  ' + fmtEvent(e));
+  return rows.join('\n');
+}
+
 // ── monitor state source ──────────────────────────────────────────────────
 
 interface MonitorState {
   readonly snapshot: SyncSnapshot;
   readonly peers: readonly ConnectedPeer[];
+  /**
+   * Most-recent wire events from whichever source we read.
+   * `local` mode → this process's own `SyncEventBuffer`.
+   * beacon modes → `payload.events` from the daemon's beacon (may be
+   * absent for older daemons; treated as an empty list).
+   */
+  readonly events: readonly SyncEvent[];
   /** Where this state came from: our own sync engine, or the daemon's beacon. */
   readonly mode: 'local' | 'beacon' | 'beacon-stale' | 'beacon-missing';
   /** Beacon age in ms (only set in beacon modes). */
@@ -188,6 +298,7 @@ async function readMonitorState(ctx: Context): Promise<MonitorState> {
     return {
       snapshot: sync.snapshot(),
       peers: sync.peers(),
+      events: sync.recentEvents(),
       mode: 'local',
     };
   }
@@ -196,6 +307,7 @@ async function readMonitorState(ctx: Context): Promise<MonitorState> {
     return {
       snapshot: { inflightInbound: 0, inflightOutbound: 0, connectedPeers: 0 },
       peers: [],
+      events: [],
       mode: 'beacon-missing',
       beaconPid: daemon.holderPid,
     };
@@ -212,6 +324,12 @@ async function readMonitorState(ctx: Context): Promise<MonitorState> {
   return {
     snapshot: beacon.payload.snapshot,
     peers,
+    /**
+     * Older daemons did not include `events`; treat that as "no events
+     * to display" rather than as an error. The mode reported in the
+     * title bar (DAEMON vs DAEMON?) already conveys beacon health.
+     */
+    events: beacon.payload.events ?? [],
     mode,
     beaconAgeMs: beacon.ageMs,
     beaconPid: beacon.payload.pid,
@@ -270,6 +388,14 @@ export async function cmdPeers(ctx: Context): Promise<void> {
   console.log(dim('─'.repeat(60)));
   const rows = state.peers.map((p) => toRow(p, now));
   console.log(renderPeerTable(rows));
+  console.log('');
+  // Recent activity: a one-shot tail. In writer-only mode this is the
+  // daemon's `events` from the beacon, which means `nbf peers` against
+  // a daemon-owned dataDir already answers "what is happening right
+  // now?" without needing to spin up the live monitor.
+  console.log(bold('Recent activity'));
+  console.log(dim('─'.repeat(60)));
+  console.log(renderEventLog(state.events, 10));
   console.log('');
 }
 
@@ -355,11 +481,28 @@ export async function cmdMonitor(ctx: Context, opts: MonitorOptions = {}): Promi
       dim(new Date().toLocaleTimeString());
     const titleBarLen = (titleBar.match(/[^\x1b]/g) || []).length; // best-effort visible-length
     const trail = '─'.repeat(Math.max(0, cols - titleBarLen - 1));
+    /**
+     * Event-log row budget: take what remains after the chrome we know
+     * we render (title + blanks + peer table + footer). For typical
+     * terminals (24+ rows) this yields a comfortable 10-line tail.
+     * If the terminal is short we shrink to a minimum of 3 rows so the
+     * activity panel never disappears entirely — better to have a
+     * smaller window than to crop it away on a tiny terminal.
+     */
+    const peerRowCount = Math.max(1, rows.length);
+    const peerTableHeight = peerRowCount + 2; // header + separator
+    const chromeHeight = 1 + 1 + peerTableHeight + 1 + 1 + 1 + 1 + 1 + 1;
+    const lines = stdout.rows || 24;
+    const eventRows = Math.max(3, Math.min(15, lines - chromeHeight));
     stdout.write(ANSI.cursorHome);
     stdout.write(ANSI.clearToEndOfScreen);
     stdout.write(titleBar + dim(' ' + trail) + '\n');
     stdout.write('\n');
     stdout.write(renderPeerTable(rows) + '\n');
+    stdout.write('\n');
+    stdout.write(bold('  Recent activity') + '\n');
+    stdout.write(dim('  ' + '─'.repeat(Math.max(20, cols - 4))) + '\n');
+    stdout.write(renderEventLog(state.events, eventRows) + '\n');
     stdout.write('\n');
     stdout.write(dim('  q · Enter · Esc · ^C   to exit') + '\n');
   };

@@ -11,6 +11,7 @@
  */
 
 import type { ConnectedPeer, SyncSnapshot } from 'nearbytes-sync/node';
+import { readSyncStateBeacon } from 'nearbytes-sync/node';
 import type { Context } from './context.js';
 import { bold, cyan, dim, green, yellow, red } from './output.js';
 
@@ -151,38 +152,123 @@ function renderSummary(snap: SyncSnapshot, peerCount: number): string {
   );
 }
 
+// ── monitor state source ──────────────────────────────────────────────────
+
+interface MonitorState {
+  readonly snapshot: SyncSnapshot;
+  readonly peers: readonly ConnectedPeer[];
+  /** Where this state came from: our own sync engine, or the daemon's beacon. */
+  readonly mode: 'local' | 'beacon' | 'beacon-stale' | 'beacon-missing';
+  /** Beacon age in ms (only set in beacon modes). */
+  readonly beaconAgeMs?: number;
+  /** Beacon-publishing daemon pid (only set in beacon modes). */
+  readonly beaconPid?: number;
+}
+
+const BEACON_STALE_THRESHOLD_MS = 5_000;
+
+/**
+ * Read the current monitor state from the appropriate source.
+ *
+ * In normal mode we are the sync engine for this dataDir, so the state
+ * lives in memory — read it from `sync.snapshot()` / `sync.peers()`.
+ *
+ * In writer-only mode (a daemon already owns the dataDir lock) we are
+ * NOT the sync engine and `sync.peers()` would always return `[]`. So
+ * we read the daemon's published state beacon
+ * (`<dataDir>/.nearbytes-sync.state.json`) and surface what it sees.
+ * If the beacon is missing or stale (>5 s old) we report that
+ * explicitly so the operator can distinguish "daemon is quietly
+ * waiting" from "daemon may be hung".
+ */
+async function readMonitorState(ctx: Context): Promise<MonitorState> {
+  const sync = ctx.skeleton.sync;
+  const daemon = (sync as { daemon?: { holderPid: number; lockPath: string } }).daemon;
+  if (daemon === undefined) {
+    return {
+      snapshot: sync.snapshot(),
+      peers: sync.peers(),
+      mode: 'local',
+    };
+  }
+  const beacon = await readSyncStateBeacon(ctx.config.dataDir);
+  if (beacon === null) {
+    return {
+      snapshot: { inflightInbound: 0, inflightOutbound: 0, connectedPeers: 0 },
+      peers: [],
+      mode: 'beacon-missing',
+      beaconPid: daemon.holderPid,
+    };
+  }
+  const peers: ConnectedPeer[] = beacon.payload.peers.map((p) => ({
+    remoteProfilePublicKey: p.remoteProfilePublicKey,
+    remotePeerId: p.remotePeerId,
+    transportLabel: p.transportLabel,
+    localAssociationProfile: p.localAssociationProfile,
+    connectedAt: new Date(p.connectedAt),
+    role: p.role,
+  }));
+  const mode = beacon.ageMs > BEACON_STALE_THRESHOLD_MS ? 'beacon-stale' : 'beacon';
+  return {
+    snapshot: beacon.payload.snapshot,
+    peers,
+    mode,
+    beaconAgeMs: beacon.ageMs,
+    beaconPid: beacon.payload.pid,
+  };
+}
+
+function describeMode(state: MonitorState): string {
+  switch (state.mode) {
+    case 'local':
+      return cyan('LIVE') + dim(' (this process is the sync engine)');
+    case 'beacon': {
+      const age = state.beaconAgeMs ?? 0;
+      return (
+        green('DAEMON') +
+        dim(
+          ` (read from beacon — pid=${state.beaconPid ?? '?'}, ${(age / 1000).toFixed(1)}s old)`,
+        )
+      );
+    }
+    case 'beacon-stale': {
+      const age = state.beaconAgeMs ?? 0;
+      return (
+        yellow('DAEMON ?') +
+        dim(
+          ` (beacon ${(age / 1000).toFixed(1)}s stale — daemon pid=${state.beaconPid ?? '?'} may be hung)`,
+        )
+      );
+    }
+    case 'beacon-missing':
+      return (
+        yellow('NO BEACON') +
+        dim(
+          ` (daemon pid=${state.beaconPid ?? '?'} owns the lock but is not publishing state)`,
+        )
+      );
+  }
+}
+
 // ── peers (single-shot) ───────────────────────────────────────────────────
 
 /**
  * Print the list of currently-connected peers once, with route hints. Used
  * by both the REPL `peers` verb and the standalone `nbf peers` subcommand.
+ * In writer-only mode reads from the daemon's beacon — never just refuses.
  */
-export function cmdPeers(ctx: Context): void {
-  const sync = ctx.skeleton.sync;
-  const daemon = (sync as { daemon?: { holderPid: number; lockPath: string } }).daemon;
-  const snap = sync.snapshot();
-  const peers = sync.peers();
+export async function cmdPeers(ctx: Context): Promise<void> {
+  const state = await readMonitorState(ctx);
   const now = Date.now();
 
   console.log('');
-  console.log(bold('Sync state'));
+  console.log(bold('Sync state') + '   ' + describeMode(state));
   console.log(dim('─'.repeat(60)));
-  if (daemon !== undefined) {
-    console.log(
-      yellow('  writer-only mode') +
-        dim(` — sync engine owned by daemon pid=${daemon.holderPid}; this CLI just writes locally.`),
-    );
-    console.log(
-      dim(`  Run `) + bold('peers') + dim(' on the daemon (e.g. `nbsync status`) for its peer view.'),
-    );
-    console.log('');
-    return;
-  }
-  console.log('  ' + renderSummary(snap, peers.length));
+  console.log('  ' + renderSummary(state.snapshot, state.peers.length));
   console.log('');
   console.log(bold('Connected peers'));
   console.log(dim('─'.repeat(60)));
-  const rows = peers.map((p) => toRow(p, now));
+  const rows = state.peers.map((p) => toRow(p, now));
   console.log(renderPeerTable(rows));
   console.log('');
 }
@@ -200,6 +286,13 @@ interface MonitorOptions {
  * session and restores it on exit; toggles raw mode only if stdin is a TTY
  * (no-op for pipes, so it stays safe in CI).
  *
+ * Source of truth:
+ *   - In normal mode: this process's own `sync.snapshot()` / `sync.peers()`.
+ *   - In writer-only mode: the daemon's published beacon
+ *     (`<dataDir>/.nearbytes-sync.state.json`). The title bar shows the
+ *     source explicitly so the operator always knows what they are
+ *     looking at.
+ *
  * Implementation note: the monitor takes over the entire screen using
  * `\x1b[2J` + cursor-home; on exit it restores the cursor and prints a
  * brief "monitor closed" footer. We deliberately do NOT touch readline's
@@ -208,21 +301,11 @@ interface MonitorOptions {
  */
 export async function cmdMonitor(ctx: Context, opts: MonitorOptions = {}): Promise<void> {
   const intervalMs = opts.intervalMs ?? 500;
-  const sync = ctx.skeleton.sync;
-  const daemon = (sync as { daemon?: { holderPid: number; lockPath: string } }).daemon;
-
-  if (daemon !== undefined) {
-    console.log(
-      yellow('  monitor not available in writer-only mode') +
-        dim(` — sync engine is owned by daemon pid=${daemon.holderPid}.`),
-    );
-    return;
-  }
 
   const tty = process.stdout.isTTY === true && process.stdin.isTTY === true;
   if (!tty) {
     // Falling back to a single snapshot is more useful than refusing entirely.
-    cmdPeers(ctx);
+    await cmdPeers(ctx);
     return;
   }
 
@@ -257,16 +340,17 @@ export async function cmdMonitor(ctx: Context, opts: MonitorOptions = {}): Promi
   process.once('SIGINT', onSig);
   process.once('SIGTERM', onSig);
 
-  const draw = (): void => {
+  const draw = async (): Promise<void> => {
+    const state = await readMonitorState(ctx);
     const now = Date.now();
-    const snap = sync.snapshot();
-    const peers = sync.peers();
-    const rows = peers.map((p) => toRow(p, now));
+    const rows = state.peers.map((p) => toRow(p, now));
     const cols = stdout.columns || 80;
     const titleBar =
       bold(' Nearbytes monitor ') +
       dim('─ ') +
-      renderSummary(snap, peers.length) +
+      describeMode(state) +
+      dim(' ─ ') +
+      renderSummary(state.snapshot, state.peers.length) +
       dim(' ─ ') +
       dim(new Date().toLocaleTimeString());
     const titleBarLen = (titleBar.match(/[^\x1b]/g) || []).length; // best-effort visible-length
@@ -281,18 +365,20 @@ export async function cmdMonitor(ctx: Context, opts: MonitorOptions = {}): Promi
   };
 
   stdout.write(ANSI.clearScreen);
-  draw();
+  await draw();
 
   await new Promise<void>((resolve) => {
-    const tick = (): void => {
+    const tick = async (): Promise<void> => {
       if (stopped) {
         resolve();
         return;
       }
-      draw();
-      setTimeout(tick, intervalMs).unref();
+      await draw();
+      const t = setTimeout(() => void tick(), intervalMs);
+      t.unref();
     };
-    setTimeout(tick, intervalMs).unref();
+    const t = setTimeout(() => void tick(), intervalMs);
+    t.unref();
   });
 
   // Restore terminal state.

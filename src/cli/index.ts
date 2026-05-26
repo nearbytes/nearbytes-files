@@ -36,7 +36,7 @@ import {
   cmdProfileRemove,
   red,
 } from './commands.js';
-import { cmdPeers } from './peersMonitor.js';
+import { cmdPeers, cmdMonitor } from './peersMonitor.js';
 import { startRepl } from './repl.js';
 
 // ---------------------------------------------------------------------------
@@ -168,7 +168,23 @@ program
     const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(async () => {
-      cmdPeers(ctx);
+      await cmdPeers(ctx);
+      await ctx.destroy();
+    });
+  });
+
+program
+  .command('monitor')
+  .alias('top')
+  .description('Live htop-style peer monitor — boots sync, opens panel directly (q/Enter/Esc/^C to exit)')
+  .option('--interval <ms>', 'Refresh interval in ms', '500')
+  .action(async (opts: { interval: string }) => {
+    const gopts = program.opts<{ config?: string; dataDir: string }>();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    const intervalMs = Math.max(100, parseInt(opts.interval, 10) || 500);
+    await bail(async () => {
+      await cmdMonitor(ctx, { intervalMs });
       await ctx.destroy();
     });
   });

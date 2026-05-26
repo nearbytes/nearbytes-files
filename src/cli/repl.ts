@@ -445,7 +445,7 @@ async function dispatch(ctx: Context, tokens: string[]): Promise<void> {
 
     // ---- diagnostics ----
     case 'peers':
-      cmdPeers(ctx);
+      await cmdPeers(ctx);
       return;
 
     case 'monitor':

@@ -9,3 +9,9 @@ package-lock.json
 !.local/
 !.local/.gitkeep
 dist/
+
+# Ad-hoc fixtures dropped into the repo root by REPL/test runs
+tmp*.jpeg
+tmp*.jpg
+tmp*.png
+tmp*.bin

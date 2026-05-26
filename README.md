@@ -72,6 +72,10 @@ Config (optional): `~/.nearbytes/config.json` — override with `-c` or `NEARBYT
 
 Volumes in config auto-open when you start `yarn repl`.
 
+### Running alongside `nbsync`
+
+The `nbf` CLI is safe to use against the same `dataDir` as a running [`nbsync`](https://github.com/nearbytes/nearbytes-sync) daemon. The skeleton's `bootSync` probes the sync-singleton lock on start: if the daemon holds it, `nbf` boots in writer-only mode (no swarm sockets, no peer-loop) and writes events/blocks straight to the shared `dataDir`. The daemon notices the new files via its filesystem watcher (DISC-27.4) and announces them to peers. From a remote peer's perspective `nbf`-authored events are indistinguishable from daemon-authored ones. No IPC, no flag, no coordination — just open the same `dataDir`.
+
 ### REPL
 
 ```sh

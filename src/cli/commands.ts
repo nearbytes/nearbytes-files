@@ -19,6 +19,11 @@ import { expandUserPath } from './paths.js';
 import { createSecret, bytesToHex } from 'nearbytes-crypto';
 import { green, yellow, red, cyan, dim, bold, formatFileTable, formatTimelineTable } from './output.js';
 import { type Context, openAndWatch, refreshIfOpen } from './context.js';
+import {
+  resolveRemotePath,
+  joinRemotePaths,
+  endsWithSlash,
+} from './remotePath.js';
 
 // ---------------------------------------------------------------------------
 // setup
@@ -81,29 +86,52 @@ export async function cmdUse(ctx: Context, keyPrefixOrSecret: string): Promise<v
   // Fall back to treating the argument as a secret and opening the volume.
   if (!rv) rv = await openAndWatch(ctx, keyPrefixOrSecret);
 
+  const switching = ctx.activeVolume !== rv;
   ctx.activeVolume = rv;
+  // Reset remote cwd on volume switch — paths from the old volume have no
+  // meaning in the new one. Single-volume re-`use` is a no-op for cwd.
+  if (switching) ctx.remoteCwd = '';
   console.log(green(`✓ Active volume: ${bytesToHex(rv.volume.publicKey)}`));
 }
 
 // ---------------------------------------------------------------------------
-// file add
+// file add (put)
 // ---------------------------------------------------------------------------
 
 export async function cmdFileAdd(
   ctx: Context,
   filePath: string,
   secret: string,
-  name?: string,
+  remoteSpec?: string,
 ): Promise<void> {
-  const resolvedPath = expandUserPath(filePath);
-  const filename = name ?? basename(resolvedPath);
-  if (!filename || filename.trim().length === 0) throw new Error('File name cannot be empty');
+  const resolvedLocal = expandUserPath(filePath);
+  const localName = basename(resolvedLocal);
+  if (!localName || localName.trim().length === 0) {
+    throw new Error('Local file has no basename');
+  }
 
-  const data = Buffer.from(await readFile(resolvedPath));
-  const meta = await ctx.fileService.addFile(secret, filename, data);
+  /**
+   * FTP/SFTP `put <local> [remote]` resolution:
+   *   - no remote arg → store at `<cwd>/<basename(local)>`
+   *   - remote ends with `/` (or is empty after trim) → directory target,
+   *     store at `<resolved-remote>/<basename(local)>`
+   *   - else → resolved remote is the full path (basename comes from caller)
+   */
+  let path: string;
+  if (remoteSpec === undefined) {
+    path = joinRemotePaths(ctx.remoteCwd, localName);
+  } else if (endsWithSlash(remoteSpec) || remoteSpec.trim() === '') {
+    const dir = resolveRemotePath(ctx.remoteCwd, remoteSpec);
+    path = joinRemotePaths(dir, localName);
+  } else {
+    path = resolveRemotePath(ctx.remoteCwd, remoteSpec);
+  }
+
+  const data = Buffer.from(await readFile(resolvedLocal));
+  const meta = await ctx.fileService.addFile(secret, path, data);
 
   console.log(green('✓ File added'));
-  console.log(`  Name : ${meta.filename}`);
+  console.log(`  Path : ${meta.path}`);
   console.log(`  Size : ${data.length} bytes`);
   console.log(`  Hash : ${meta.blobHash.slice(0, 32)}…`);
 
@@ -111,18 +139,59 @@ export async function cmdFileAdd(
 }
 
 // ---------------------------------------------------------------------------
-// file list
+// file list (ls / dir)
 // ---------------------------------------------------------------------------
 
-export async function cmdFileList(ctx: Context, secret: string): Promise<void> {
-  const files = await ctx.fileService.listFiles(secret);
-  if (files.length === 0) {
-    console.log(yellow('  (no files)'));
+export async function cmdFileList(
+  ctx: Context,
+  secret: string,
+  pathArg?: string,
+): Promise<void> {
+  const target = pathArg === undefined ? ctx.remoteCwd : resolveRemotePath(ctx.remoteCwd, pathArg);
+  const [files, dirs] = await Promise.all([
+    ctx.fileService.listFiles(secret),
+    ctx.fileService.listDirectories(secret),
+  ]);
+
+  const inScopeFiles = files.filter((f) => pathLivesUnder(f.path, target));
+  const inScopeDirs = dirs.filter((d) => d.path !== target && pathLivesUnder(d.path, target));
+
+  if (inScopeFiles.length === 0 && inScopeDirs.length === 0) {
+    console.log(yellow('  (no entries)'));
     return;
   }
-  console.log(green(`✓ ${files.length} file(s):`));
-  console.log('');
-  console.log(formatFileTable(files));
+
+  if (inScopeDirs.length > 0) {
+    console.log(green(`✓ ${inScopeDirs.length} director${inScopeDirs.length === 1 ? 'y' : 'ies'}:`));
+    for (const d of inScopeDirs.sort((a, b) => a.path.localeCompare(b.path))) {
+      const display = target.length > 0 ? d.path.slice(target.length + 1) : d.path;
+      const marker = d.explicit ? cyan('d ') : dim('· ');
+      console.log(`  ${marker}${display}/`);
+    }
+    console.log('');
+  }
+
+  if (inScopeFiles.length > 0) {
+    console.log(green(`✓ ${inScopeFiles.length} file(s):`));
+    console.log('');
+    console.log(
+      formatFileTable(
+        inScopeFiles.map((f) => ({
+          ...f,
+          path: target.length > 0 ? f.path.slice(target.length + 1) : f.path,
+        })),
+      ),
+    );
+  }
+}
+
+/**
+ * True when `candidate` is either equal to `target` or a direct or
+ * transitive child of `target/`. Empty `target` matches every path.
+ */
+function pathLivesUnder(candidate: string, target: string): boolean {
+  if (target === '') return true;
+  return candidate === target || candidate.startsWith(`${target}/`);
 }
 
 // ---------------------------------------------------------------------------
@@ -131,26 +200,28 @@ export async function cmdFileList(ctx: Context, secret: string): Promise<void> {
 
 export async function cmdFileGet(
   ctx: Context,
-  filename: string,
+  remoteSpec: string,
   secret: string,
   outputPath?: string,
 ): Promise<void> {
+  const remotePath = resolveRemotePath(ctx.remoteCwd, remoteSpec);
   const files = await ctx.fileService.listFiles(secret);
-  const meta = files.find((f) => f.filename === filename);
-  if (!meta) throw new Error(`File "${filename}" not found in volume`);
+  const meta = files.find((f) => f.path === remotePath);
+  if (!meta) throw new Error(`File "${remotePath}" not found in volume`);
 
   /**
    * FTP/SFTP convention: `get <remote>` (no local arg) writes into the
-   * current local working directory under the remote's name. `get <remote>
-   * <local>` writes to the explicit local path; an existing directory is
-   * treated as a parent (file lands at `<dir>/<remote>`).
+   * current local working directory under the remote's basename. `get
+   * <remote> <local>` writes to the explicit local path; an existing
+   * directory is treated as a parent (file lands at `<dir>/<basename>`).
    */
-  const resolvedOutput = await resolveLocalSink(outputPath, filename);
+  const remoteBasename = basename(meta.path);
+  const resolvedOutput = await resolveLocalSink(outputPath, remoteBasename);
   const data = await ctx.fileService.getFile(secret, meta.blobHash);
   await writeFile(resolvedOutput, data);
 
   console.log(green('✓ File retrieved'));
-  console.log(`  Remote : ${filename}`);
+  console.log(`  Remote : ${meta.path}`);
   console.log(`  Local  : ${resolvedOutput}`);
   console.log(`  Size   : ${data.length} bytes`);
 }
@@ -179,20 +250,72 @@ async function resolveLocalSink(outputPath: string | undefined, remoteName: stri
 }
 
 // ---------------------------------------------------------------------------
-// file remove
+// delete (rm) — files AND directories; materializer cascades
 // ---------------------------------------------------------------------------
 
 export async function cmdFileRemove(
   ctx: Context,
-  filename: string,
+  target: string,
   secret: string,
 ): Promise<void> {
-  await ctx.fileService.deleteFile(secret, filename);
+  const path = resolveRemotePath(ctx.remoteCwd, target);
+  await ctx.fileService.delete(secret, path);
 
-  console.log(green('✓ File removed'));
-  console.log(`  Name: ${filename}`);
+  console.log(green('✓ Deleted'));
+  console.log(`  Path: ${path}`);
 
   await refreshIfOpen(ctx, secret);
+}
+
+// ---------------------------------------------------------------------------
+// mkdir
+// ---------------------------------------------------------------------------
+
+export async function cmdMkdir(
+  ctx: Context,
+  target: string,
+  secret: string,
+): Promise<void> {
+  const path = resolveRemotePath(ctx.remoteCwd, target);
+  const meta = await ctx.fileService.mkdir(secret, path);
+
+  console.log(green('✓ Directory created'));
+  console.log(`  Path: ${meta.path}/`);
+
+  await refreshIfOpen(ctx, secret);
+}
+
+// ---------------------------------------------------------------------------
+// cd — change remote working directory
+// ---------------------------------------------------------------------------
+
+export async function cmdCd(
+  ctx: Context,
+  target: string | undefined,
+  secret: string,
+): Promise<void> {
+  if (target === undefined || target.trim() === '' || target.trim() === '~') {
+    ctx.remoteCwd = '';
+    console.log(`${bold('Remote directory now')}: /`);
+    return;
+  }
+  const path = resolveRemotePath(ctx.remoteCwd, target);
+  if (path === '') {
+    ctx.remoteCwd = '';
+    console.log(`${bold('Remote directory now')}: /`);
+    return;
+  }
+  /**
+   * Validate against the materialized directory set so users can't `cd`
+   * into a non-existent path. Implicit directories (created by nested
+   * files) count as valid targets — they show up in `listDirectories`.
+   */
+  const dirs = await ctx.fileService.listDirectories(secret);
+  if (!dirs.some((d) => d.path === path)) {
+    throw new Error(`No such directory in the volume: "${path}"`);
+  }
+  ctx.remoteCwd = path;
+  console.log(`${bold('Remote directory now')}: /${path}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -237,18 +360,40 @@ export async function cmdRefresh(ctx: Context): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// rename (FTP `rename` / `mv`)
+// rename (FTP `rename` / POSIX `mv`)
 // ---------------------------------------------------------------------------
 
 export async function cmdRename(
   ctx: Context,
-  fromName: string,
-  toName: string,
+  fromSpec: string,
+  toSpec: string,
   secret: string,
 ): Promise<void> {
-  await ctx.fileService.renameFile(secret, fromName, toName);
-  console.log(green('✓ File renamed'));
-  console.log(`  ${fromName} ${dim('→')} ${toName}`);
+  const fromPath = resolveRemotePath(ctx.remoteCwd, fromSpec);
+
+  /**
+   * POSIX-style `mv` resolution for the destination:
+   *   - trailing `/` on toSpec → treat as "move into this directory",
+   *     so target becomes `<resolved>/<basename(fromPath)>`.
+   *   - resolved target exists as a directory → same behavior.
+   *   - else → resolved target is the literal new path.
+   * The protocol always emits a single RENAME(fromPath, toPath) event;
+   * directory-vs-file conflict resolution lives in the materializer.
+   */
+  const resolvedTo = resolveRemotePath(ctx.remoteCwd, toSpec);
+  const dirs = await ctx.fileService.listDirectories(secret);
+  const destIsDir = dirs.some((d) => d.path === resolvedTo);
+  const fromBasename = fromPath.includes('/')
+    ? fromPath.slice(fromPath.lastIndexOf('/') + 1)
+    : fromPath;
+  const toPath =
+    endsWithSlash(toSpec) || destIsDir
+      ? joinRemotePaths(resolvedTo, fromBasename)
+      : resolvedTo;
+
+  await ctx.fileService.rename(secret, fromPath, toPath);
+  console.log(green('✓ Renamed'));
+  console.log(`  ${fromPath} ${dim('→')} ${toPath}`);
   await refreshIfOpen(ctx, secret);
 }
 
@@ -294,13 +439,21 @@ export async function cmdMget(
     console.log(yellow('  (volume is empty)'));
     return;
   }
+  /**
+   * `mget` patterns match against the remote path relative to the active
+   * remote cwd, mirroring how `ls` would render them. This keeps the
+   * common case (`mget *.txt` from inside a subdir) intuitive.
+   */
+  const inScope = files.filter((f) => pathLivesUnder(f.path, ctx.remoteCwd));
+  const relativeBase = ctx.remoteCwd === '' ? '' : `${ctx.remoteCwd}/`;
   const targets = new Map<string, (typeof files)[number]>();
   for (const pat of patterns) {
     const re = compileGlob(pat);
     let matched = 0;
-    for (const f of files) {
-      if (re.test(f.filename)) {
-        targets.set(f.filename, f);
+    for (const f of inScope) {
+      const relative = relativeBase === '' ? f.path : f.path.slice(relativeBase.length);
+      if (re.test(relative) || re.test(f.path)) {
+        targets.set(f.path, f);
         matched += 1;
       }
     }
@@ -315,15 +468,22 @@ export async function cmdMget(
   let ok = 0;
   let fail = 0;
   for (const meta of targets.values()) {
-    const local = join(destBase, meta.filename);
+    /**
+     * Mirror the relative remote path under the local destination so that
+     * `mget docs/* -d ./backup` produces `./backup/docs/<basename>` —
+     * this is what users expect when grabbing whole subtrees.
+     */
+    const relative = relativeBase === '' ? meta.path : meta.path.slice(relativeBase.length);
+    const local = join(destBase, relative);
     try {
+      await mkdir(join(local, '..'), { recursive: true });
       const data = await ctx.fileService.getFile(secret, meta.blobHash);
       await writeFile(local, data);
-      console.log(green(`  ✓ ${meta.filename}`) + dim(` → ${local} (${data.length} bytes)`));
+      console.log(green(`  ✓ ${meta.path}`) + dim(` → ${local} (${data.length} bytes)`));
       ok += 1;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(red(`  ✗ ${meta.filename}: ${msg}`));
+      console.error(red(`  ✗ ${meta.path}: ${msg}`));
       fail += 1;
     }
   }
@@ -368,8 +528,9 @@ export async function cmdMput(
   for (const local of expanded) {
     try {
       const data = Buffer.from(await readFile(local));
-      const meta = await ctx.fileService.addFile(secret, basename(local), data);
-      console.log(green(`  ✓ ${meta.filename}`) + dim(` ← ${local} (${data.length} bytes)`));
+      const remotePath = joinRemotePaths(ctx.remoteCwd, basename(local));
+      const meta = await ctx.fileService.addFile(secret, remotePath, data);
+      console.log(green(`  ✓ ${meta.path}`) + dim(` ← ${local} (${data.length} bytes)`));
       ok += 1;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -388,15 +549,18 @@ export async function cmdMput(
 // pwd / lcd / lpwd / lls — FTP-style local-filesystem helpers
 // ---------------------------------------------------------------------------
 
-/** FTP `pwd` — print active "remote directory" (the active volume's identity). */
+/**
+ * FTP `pwd` — print the active remote working directory inside the volume.
+ * If the cwd is the root, this prints `/`; otherwise the leading `/` is
+ * shown for clarity so the path looks like a familiar absolute path.
+ */
 export async function cmdPwd(ctx: Context): Promise<void> {
   if (!ctx.activeVolume) {
     throw new Error('No active volume — `open <secret>` or `use <key|secret>` first');
   }
   const keyHex = bytesToHex(ctx.activeVolume.volume.publicKey);
-  const state = ctx.activeVolume.get();
-  console.log(`${bold('volume')} : ${keyHex}`);
-  console.log(`${bold('files')}  : ${state.files.size}`);
+  console.log(`${bold('volume')} : ${keyHex.slice(0, 16)}…`);
+  console.log(`${bold('cwd')}    : /${ctx.remoteCwd}`);
 }
 
 /** FTP `lpwd` — print local working directory. */
@@ -589,20 +753,22 @@ export function cmdHelp(): void {
   console.log(`
 ${bold('Nearbytes REPL')} ${dim('— FTP/SFTP-style commands. The "file" prefix is optional everywhere.')}
 
-${cyan('File transfer')}
-  ls ${dim('[-s <secret>]')}                       List files in the active volume     ${dim('(alias: dir, list)')}
-  get <remote> ${dim('[local]')}                   Download a file ${dim('(default local: ./<remote>)')}
-  put <local> ${dim('[remote]')}                   Upload a file ${dim('(default remote: basename)')}
+${cyan('Remote filesystem (volume)')}
+  ls ${dim('[path] [-s <secret>]')}                List entries under path ${dim('(default: cwd, alias: dir, list)')}
+  cd ${dim('[path]')}                              Change remote working directory ${dim('(default: /)')}
+  pwd                                    Print the remote working directory
+  mkdir <path>                           Create an explicit (possibly empty) directory
+  get <remote> ${dim('[local]')}                   Download a file ${dim('(default local: ./<basename>)')}
+  put <local> ${dim('[remote|dir/]')}              Upload a file ${dim('(default remote: <cwd>/<basename>)')}
   mget <name|pattern>... ${dim('[-d <dir>]')}      Download multiple files (* and ? wildcards)
   mput <local|pattern>...                Upload multiple files (* and ? wildcards)
-  rm <remote>                            Delete a file ${dim('(alias: delete, del)')}
-  mv <from> <to>                         Rename a file ${dim('(alias: rename)')}
+  rm <path>                              Delete a path ${dim('(file or directory; cascade, alias: delete)')}
+  mv <from> <to>                         Rename a path ${dim('(trailing / on <to> moves into dir)')}
 
-${cyan('Local-filesystem navigation (FTP semantics)')}
+${cyan('Local filesystem (FTP semantics)')}
   lpwd                                   Print local working directory
   lcd ${dim('[path]')}                             Change local working directory ${dim('(default: ~)')}
   lls ${dim('[path]')}                             List local entries ${dim('(default: cwd)')}
-  pwd                                    Show active volume identity ${dim('(remote "directory")')}
 
 ${cyan('Volume connections')}
   open <secret>                          Open a volume and make it active ${dim('(alias: volume open)')}
@@ -610,7 +776,7 @@ ${cyan('Volume connections')}
   use <key-prefix|secret>                Switch the active volume
   volumes                                List all open volumes in this session
   setup <secret>                         Derive and display the public key for a secret
-  info                                   Show active volume info ${dim('(alias of pwd)')}
+  info                                   Show active volume info
   timeline ${dim('[-s <secret>]')}                 Chronological audit log of volume events
   refresh                                Reload active volume state
 

@@ -3,10 +3,19 @@ export { createReactiveVolume } from './reactiveVolume.js';
 export type { ReactiveVolume } from './reactiveVolume.js';
 
 // Types
-export type { FileMetadata, FileEvent, CreateFileEvent, DeleteFileEvent, RenameFileEvent } from './fileEvents.js';
+export type {
+  FileMetadata,
+  DirectoryMetadata,
+  FileEvent,
+  CreateFileEvent,
+  MkdirEvent,
+  DeleteEvent,
+  RenameEvent,
+} from './fileEvents.js';
 export type {
   FileService,
   FileServiceDependencies,
+  AddFileOptions,
   TimelineEvent,
   TimelineDelta,
   EventDetail,
@@ -14,8 +23,7 @@ export type {
   ReferenceExportResult,
   SourceImportResult,
   RecipientImportResult,
-  RenameFileSummary,
-  RenameFolderSummary,
+  RenameSummary,
 } from './fileService.js';
 export type {
   SourceReferenceBundle,
@@ -71,14 +79,16 @@ export {
   materializeVolume,
   getFile,
   listFiles,
+  listDirectories,
 } from './volume.js';
 export {
   storeData,
   retrieveData,
   storeDataDeduplicated,
-  deleteFile,
+  deletePath,
   setupChannel,
 } from './operations.js';
+export { normalizeVolumePath, basename, dirname } from './pathUtils.js';
 export {
   createIdentityRecord,
   verifyIdentityRecord,

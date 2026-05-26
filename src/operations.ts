@@ -64,10 +64,10 @@ export async function storeData(
   // 6. Encrypt the symmetric key
   const encryptedKey = await crypto.encryptSym(symmetricKey, keyEncryptionKey);
 
-  // 7. Create event payload (spec: file-events-v0.3)
+  // 7. Create event payload (spec: file-events-v0.4)
   const payload: EventPayload = {
     type: EventType.CREATE_FILE,
-    filename: fileName,
+    path: fileName,
     content: { protocol: 'nb.content.single.v1', blockHash: dataHash },
     wrappedKey: createEncryptedData(encryptedKey),
     createdAt: Date.now(),
@@ -172,10 +172,10 @@ export async function storeDataDeduplicated(
   // 8. Encrypt the symmetric key
   const encryptedKey = await crypto.encryptSym(symmetricKey, keyEncryptionKey);
 
-  // 9. Create event payload (spec: file-events-v0.3)
+  // 9. Create event payload (spec: file-events-v0.4)
   const payload: EventPayload = {
     type: EventType.CREATE_FILE,
-    filename: fileName,
+    path: fileName,
     content: { protocol: 'nb.content.single.v1', blockHash: dataHash },
     wrappedKey: createEncryptedData(encryptedKey),
     createdAt: Date.now(),
@@ -188,27 +188,22 @@ export async function storeDataDeduplicated(
 }
 
 /**
- * Deletes a file from a channel
- * @param fileName - Name of the file to delete
- * @param secret - Channel secret
- * @param crypto - Cryptographic operations
- * @param channelStorage - Channel storage instance
- * @returns Event hash
+ * Deletes a path from a channel. If `path` resolves to a directory the
+ * materializer recursively removes every descendant; this helper is just
+ * the transport-level event emit.
  */
-export async function deleteFile(
-  fileName: string,
+export async function deletePath(
+  path: string,
   secret: Secret,
   crypto: CryptoOperations,
   channelStorage: Log
 ): Promise<{ eventHash: Hash }> {
-  // 1. Derive keys from secret
   const keyPair = await crypto.deriveKeys(secret);
 
-  // 2. Create DELETE_FILE event payload (spec: file-events-v0.3)
-  // No block refs needed — deletion carries no data blocks
+  // file-events-v0.4: DELETE carries no block refs.
   const payload: EventPayload = {
-    type: EventType.DELETE_FILE,
-    filename: fileName,
+    type: EventType.DELETE,
+    path,
     deletedAt: Date.now(),
   };
 

@@ -41,19 +41,19 @@ function fmtDate(ms: number): string {
 /**
  * Format a list of FileMetadata entries as a compact, human-readable table.
  *
- * Columns: Name · Size · Created · Content hash (first 16 hex chars + ellipsis)
+ * Columns: Path · Size · Created · Content hash (first 16 hex chars + ellipsis)
  */
 export function formatFileTable(files: readonly FileMetadata[]): string {
   if (files.length === 0) return yellow('  (no files)');
 
-  const sorted = [...files].sort((a, b) => a.filename.localeCompare(b.filename));
+  const sorted = [...files].sort((a, b) => a.path.localeCompare(b.path));
 
   const COL_SIZE = 10;
   const COL_DATE = 18;
-  const col1 = Math.min(48, Math.max(8, ...sorted.map((f) => f.filename.length)) + 2);
+  const col1 = Math.min(48, Math.max(8, ...sorted.map((f) => f.path.length)) + 2);
 
   const header =
-    bold('Name'.padEnd(col1)) +
+    bold('Path'.padEnd(col1)) +
     bold('Size'.padEnd(COL_SIZE)) +
     bold('Created'.padEnd(COL_DATE)) +
     bold('Content hash');
@@ -61,12 +61,10 @@ export function formatFileTable(files: readonly FileMetadata[]): string {
   const sep = dim('─'.repeat(col1 + COL_SIZE + COL_DATE + 17));
 
   const body = sorted.map((f) => {
-    const name =
-      f.filename.length > col1 - 2
-        ? f.filename.slice(0, col1 - 5) + '...'
-        : f.filename;
+    const display =
+      f.path.length > col1 - 2 ? f.path.slice(0, col1 - 5) + '...' : f.path;
     return (
-      name.padEnd(col1) +
+      display.padEnd(col1) +
       fmtSize(f.size).padEnd(COL_SIZE) +
       fmtDate(f.createdAt).padEnd(COL_DATE) +
       f.blobHash.slice(0, 16) + '…'
@@ -77,13 +75,16 @@ export function formatFileTable(files: readonly FileMetadata[]): string {
 }
 
 function describeTimelineEvent(event: TimelineEvent): string {
+  const shadowMark = event.shadow ? ' ⚠' : '';
   switch (event.type) {
     case EventType.CREATE_FILE:
-      return `+ ${event.filename}`;
-    case EventType.DELETE_FILE:
-      return `- ${event.filename}`;
-    case EventType.RENAME_FILE:
-      return `${event.filename} → ${event.toFilename ?? '?'}`;
+      return `+ ${event.path}${shadowMark}`;
+    case EventType.MKDIR:
+      return `+ ${event.path}/${shadowMark}`;
+    case EventType.DELETE:
+      return `- ${event.path}${shadowMark}`;
+    case EventType.RENAME:
+      return `${event.path} → ${event.toPath ?? '?'}${shadowMark}`;
     case EventType.DECLARE_IDENTITY:
       return event.summary ?? event.displayName ?? 'identity';
     case EventType.CHAT_MESSAGE:
@@ -99,9 +100,11 @@ function formatTimelineType(event: TimelineEvent): string {
   switch (event.type) {
     case EventType.CREATE_FILE:
       return 'create';
-    case EventType.DELETE_FILE:
+    case EventType.MKDIR:
+      return 'mkdir';
+    case EventType.DELETE:
       return 'delete';
-    case EventType.RENAME_FILE:
+    case EventType.RENAME:
       return 'rename';
     case EventType.DECLARE_IDENTITY:
       return 'identity';

@@ -45,6 +45,8 @@ import {
   cmdFileList,
   cmdFileGet,
   cmdFileRemove,
+  cmdMkdir,
+  cmdCd,
   cmdRefresh,
   cmdTimeline,
   cmdHelp,
@@ -220,8 +222,22 @@ async function dispatch(ctx: Context, tokens: string[]): Promise<void> {
     case 'ls':
     case 'dir':
     case 'list': {
-      const { secret } = extractFlags(rest);
-      await cmdFileList(ctx, resolveSecret(ctx, secret));
+      const { positional, secret } = extractFlags(rest);
+      await cmdFileList(ctx, resolveSecret(ctx, secret), positional[0]);
+      return;
+    }
+
+    case 'mkdir': {
+      const { positional, secret } = extractFlags(rest);
+      const [target] = positional;
+      if (!target) throw new Error('Usage: mkdir <path>');
+      await cmdMkdir(ctx, target, resolveSecret(ctx, secret));
+      return;
+    }
+
+    case 'cd': {
+      const { positional, secret } = extractFlags(rest);
+      await cmdCd(ctx, positional[0], resolveSecret(ctx, secret));
       return;
     }
 

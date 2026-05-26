@@ -2,72 +2,63 @@ import type { FileEvent } from './fileEvents.js';
 
 /**
  * Encodes a FileEvent into a UTF-8 JSON byte array.
- * @param event - FileEvent to encode
- * @returns Encoded bytes
- * @throws Error if the event does not match the FileEvent schema
+ * @throws Error if the event does not match the FileEvent schema.
  */
 export function encodeFileEvent(event: FileEvent): Uint8Array {
   if (!isFileEvent(event)) {
     throw new Error('Invalid FileEvent: cannot encode');
   }
-  const json = JSON.stringify(event);
-  return new TextEncoder().encode(json);
+  return new TextEncoder().encode(JSON.stringify(event));
 }
 
 /**
  * Decodes a FileEvent from a UTF-8 JSON byte array.
- * @param data - Encoded FileEvent bytes
- * @returns Decoded FileEvent
- * @throws Error if the data is not valid JSON or does not match the FileEvent schema
+ * @throws Error if the data is not valid JSON or does not match the schema.
  */
 export function decodeFileEvent(data: Uint8Array): FileEvent {
   let parsed: unknown;
   try {
-    const json = new TextDecoder().decode(data);
-    parsed = JSON.parse(json);
+    parsed = JSON.parse(new TextDecoder().decode(data));
   } catch (error) {
-    throw new Error(`Failed to decode FileEvent: ${error instanceof Error ? error.message : 'unknown error'}`);
+    throw new Error(
+      `Failed to decode FileEvent: ${error instanceof Error ? error.message : 'unknown error'}`,
+    );
   }
-
   if (!isFileEvent(parsed)) {
     throw new Error('Invalid FileEvent: schema validation failed');
   }
-
   return parsed;
 }
 
 /**
- * Runtime validator for FileEvent objects.
- * @param obj - Value to validate
- * @returns True if the value conforms to FileEvent
+ * Runtime validator for FileEvent objects. Recognizes the four file-events-v0.4
+ * variants: CREATE_FILE, MKDIR, DELETE, RENAME.
  */
 export function isFileEvent(obj: unknown): obj is FileEvent {
-  if (!isRecord(obj)) {
-    return false;
-  }
+  if (!isRecord(obj)) return false;
 
   if (obj.type === 'CREATE_FILE') {
     return (
-      typeof obj.filename === 'string' &&
+      typeof obj.path === 'string' &&
       typeof obj.blobHash === 'string' &&
       isFiniteUint(obj.size) &&
       isFiniteUint(obj.createdAt) &&
       (obj.mimeType === undefined || typeof obj.mimeType === 'string')
     );
   }
-
-  if (obj.type === 'DELETE_FILE') {
-    return typeof obj.filename === 'string' && isFiniteUint(obj.deletedAt);
+  if (obj.type === 'MKDIR') {
+    return typeof obj.path === 'string' && isFiniteUint(obj.createdAt);
   }
-
-  if (obj.type === 'RENAME_FILE') {
+  if (obj.type === 'DELETE') {
+    return typeof obj.path === 'string' && isFiniteUint(obj.deletedAt);
+  }
+  if (obj.type === 'RENAME') {
     return (
-      typeof obj.filename === 'string' &&
-      typeof obj.toFilename === 'string' &&
+      typeof obj.fromPath === 'string' &&
+      typeof obj.toPath === 'string' &&
       isFiniteUint(obj.renamedAt)
     );
   }
-
   return false;
 }
 

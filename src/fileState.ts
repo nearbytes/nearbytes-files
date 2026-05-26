@@ -1,61 +1,65 @@
 import type { FileEvent, FileMetadata } from './fileEvents.js';
+import { materialize, type CanonicalEntry } from './fileMaterializer.js';
 
 /**
  * Reconstructs the current file state by replaying an append-only event log.
  *
- * Event sourcing treats the log as the single source of truth. By deterministically
- * applying all file events in chronological order, the current state can always be
- * derived without any mutable index. This guarantees that the same event history
- * produces the same file listing on every machine.
- *
- * @param events - File events to replay
- * @returns Map of filename to reconstructed file metadata
+ * The materializer enforces the file-events-v0.4 cascade semantics — implicit
+ * directories, recursive DELETE, prefix-swap RENAME, conflict shadowing —
+ * shared with `volume.ts`'s live replay path.
  */
 export function reconstructFileState(events: FileEvent[]): Map<string, FileMetadata> {
   const ordered = [...events].sort((a, b) => {
     const timeDiff = getEventTimestamp(a) - getEventTimestamp(b);
     if (timeDiff !== 0) return timeDiff;
-
-    const nameDiff = compareStrings(a.filename, b.filename);
+    const nameDiff = compareStrings(getEventPrimaryPath(a), getEventPrimaryPath(b));
     if (nameDiff !== 0) return nameDiff;
-
     return compareStrings(eventTieBreaker(a), eventTieBreaker(b));
   });
 
-  const files = new Map<string, FileMetadata>();
+  const entries: CanonicalEntry[] = ordered.map((event, sequence) => ({
+    tiebreak: String(sequence),
+    event: toCanonical(event),
+  }));
 
-  for (const event of ordered) {
-    if (event.type === 'CREATE_FILE') {
-      files.set(event.filename, {
-        filename: event.filename,
-        blobHash: event.blobHash,
-        contentType: event.contentType,
-        size: event.size,
-        mimeType: event.mimeType,
-        createdAt: event.createdAt,
-      });
-    } else if (event.type === 'DELETE_FILE') {
-      files.delete(event.filename);
-    } else if (event.type === 'RENAME_FILE') {
-      const existing = files.get(event.filename);
-      if (!existing) {
-        continue;
-      }
-      files.delete(event.filename);
-      files.set(event.toFilename, {
-        ...existing,
-        filename: event.toFilename,
-      });
-    }
+  return new Map(materialize(entries).files);
+}
+
+function toCanonical(event: FileEvent): CanonicalEntry['event'] {
+  if (event.type === 'CREATE_FILE') {
+    return {
+      kind: 'CREATE_FILE',
+      path: event.path,
+      blobHash: event.blobHash,
+      contentType: event.contentType,
+      size: event.size,
+      mimeType: event.mimeType,
+      createdAt: event.createdAt,
+    };
   }
-
-  return files;
+  if (event.type === 'MKDIR') {
+    return { kind: 'MKDIR', path: event.path, createdAt: event.createdAt };
+  }
+  if (event.type === 'DELETE') {
+    return { kind: 'DELETE', path: event.path, deletedAt: event.deletedAt };
+  }
+  return {
+    kind: 'RENAME',
+    fromPath: event.fromPath,
+    toPath: event.toPath,
+    renamedAt: event.renamedAt,
+  };
 }
 
 function getEventTimestamp(event: FileEvent): number {
-  if (event.type === 'CREATE_FILE') return event.createdAt;
-  if (event.type === 'DELETE_FILE') return event.deletedAt;
+  if (event.type === 'CREATE_FILE' || event.type === 'MKDIR') return event.createdAt;
+  if (event.type === 'DELETE') return event.deletedAt;
   return event.renamedAt;
+}
+
+function getEventPrimaryPath(event: FileEvent): string {
+  if (event.type === 'RENAME') return event.fromPath;
+  return event.path;
 }
 
 function compareStrings(left: string, right: string): number {
@@ -65,11 +69,8 @@ function compareStrings(left: string, right: string): number {
 }
 
 function eventTieBreaker(event: FileEvent): string {
-  if (event.type === 'CREATE_FILE') {
-    return `C:${event.blobHash}`;
-  }
-  if (event.type === 'RENAME_FILE') {
-    return `R:${event.toFilename}`;
-  }
+  if (event.type === 'CREATE_FILE') return `C:${event.blobHash}`;
+  if (event.type === 'MKDIR') return 'M';
+  if (event.type === 'RENAME') return `R:${event.toPath}`;
   return 'D';
 }

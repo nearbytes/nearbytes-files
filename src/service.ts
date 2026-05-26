@@ -5,6 +5,7 @@
 export type {
   FileService,
   FileServiceDependencies,
+  AddFileOptions,
   TimelineEvent,
   TimelineDelta,
   EventDetail,
@@ -12,8 +13,7 @@ export type {
   ReferenceExportResult,
   SourceImportResult,
   RecipientImportResult,
-  RenameFileSummary,
-  RenameFolderSummary,
+  RenameSummary,
 } from './fileService.js';
 
 export { createFileService } from './fileService.js';

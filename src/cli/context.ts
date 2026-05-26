@@ -20,6 +20,13 @@ export interface Context {
   activeVolume: ReactiveVolume | null;
   readonly volumes: Map<string, ReactiveVolume>;
   readonly watchers: Map<string, VolumeWatcher>;
+  /**
+   * Current "remote working directory" inside the active volume — used by
+   * FTP-style commands so users can `cd notes/2026 && ls`. Empty string
+   * means the volume's root. The cwd is session-only, not persisted, and
+   * is silently reset to `''` whenever the active volume changes.
+   */
+  remoteCwd: string;
   destroy(): Promise<void>;
 }
 
@@ -39,6 +46,7 @@ export async function createContext(config: NearbytesConfig): Promise<Context> {
     activeVolume: null,
     volumes,
     watchers,
+    remoteCwd: '',
 
     async destroy(): Promise<void> {
       for (const w of watchers.values()) w.close();

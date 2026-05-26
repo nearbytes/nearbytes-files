@@ -30,10 +30,12 @@ import {
 // ---------------------------------------------------------------------------
 
 const TOP_LEVEL = [
-  // File transfer
+  // Remote filesystem
   'ls',
   'dir',
   'list',
+  'cd',
+  'mkdir',
   'get',
   'put',
   'mget',
@@ -77,8 +79,11 @@ const VOLUME_SUB = ['open', 'close', 'info', 'show'] as const;
 const SECRET_FLAGS = ['-s', '--secret'] as const;
 const DEST_FLAGS = ['-d', '--dest'] as const;
 
-// Verbs whose first positional is a remote filename in the active volume.
-const REMOTE_NAME_VERBS = new Set(['ls', 'dir', 'list', 'get', 'rm', 'delete', 'del', 'mv', 'rename', 'mget']);
+// Verbs whose first positional is a remote path in the active volume.
+const REMOTE_NAME_VERBS = new Set([
+  'ls', 'dir', 'list', 'get', 'rm', 'delete', 'del', 'remove',
+  'mv', 'rename', 'mget', 'cd', 'mkdir',
+]);
 
 // Verbs whose first positional is a local path.
 const LOCAL_PATH_VERBS = new Set(['put', 'add', 'upload', 'mput', 'lcd', 'lls']);
@@ -163,6 +168,68 @@ function activeFileNames(ctx: Context): string[] {
   if (!ctx.activeVolume) return [];
   const state = ctx.activeVolume.get();
   return [...state.files.keys()].map(quoteIfNeeded);
+}
+
+/**
+ * Completion candidates for a remote path under the current `remoteCwd`.
+ * For a partial like `docs/`, returns every child of `docs/`. Directories
+ * are suffixed with `/` so a second TAB descends one level deeper.
+ *
+ * Honors both file and directory entries (so `ls`, `cd`, `mkdir`, `rm`,
+ * `mv` all surface the right kinds when their position calls for it).
+ *
+ * @param include - `'all'` returns files + dirs, `'dirs'` returns dirs only.
+ */
+function completeRemotePaths(ctx: Context, partial: string, include: 'all' | 'dirs'): string[] {
+  if (!ctx.activeVolume) return [];
+  const state = ctx.activeVolume.get();
+  const cwd = ctx.remoteCwd;
+
+  /**
+   * The token may include an embedded sub-directory (e.g. `docs/2026/m`),
+   * in which case we descend into `docs/2026` and complete `m*` against
+   * its children. The displayed candidate keeps the user-typed prefix so
+   * readline can replace the partial token cleanly.
+   */
+  const lastSlash = partial.lastIndexOf('/');
+  const typedDir = lastSlash >= 0 ? partial.slice(0, lastSlash) : '';
+  const typedBase = lastSlash >= 0 ? partial.slice(lastSlash + 1) : partial;
+
+  let scanDir: string;
+  if (partial.startsWith('/')) {
+    scanDir = typedDir.replace(/^\/+/, '');
+  } else if (typedDir.length === 0) {
+    scanDir = cwd;
+  } else {
+    scanDir = cwd === '' ? typedDir : `${cwd}/${typedDir}`;
+  }
+
+  const scanPrefix = scanDir === '' ? '' : `${scanDir}/`;
+  const direct = new Set<string>();
+
+  if (include === 'all') {
+    for (const fpath of state.files.keys()) {
+      if (!fpath.startsWith(scanPrefix)) continue;
+      const tail = fpath.slice(scanPrefix.length);
+      if (tail.includes('/')) continue;
+      direct.add(tail);
+    }
+  }
+  for (const dpath of state.directories.keys()) {
+    if (dpath === scanDir) continue;
+    if (!dpath.startsWith(scanPrefix)) continue;
+    const tail = dpath.slice(scanPrefix.length);
+    if (tail.includes('/')) continue;
+    direct.add(`${tail}/`);
+  }
+
+  return [...direct]
+    .filter((c) => c.startsWith(typedBase) || typedBase.length === 0)
+    .map((c) => {
+      const displayPrefix = typedDir.length > 0 ? `${typedDir}/` : partial.startsWith('/') ? '/' : '';
+      return quoteIfNeeded(`${displayPrefix}${c}`);
+    })
+    .sort();
 }
 
 function profileNames(ctx: Context): string[] {
@@ -282,9 +349,6 @@ function suggestForFlatVerb(
   }
 
   switch (verb) {
-    case 'ls':
-    case 'dir':
-    case 'list':
     case 'pwd':
     case 'lpwd':
     case 'volumes':
@@ -303,9 +367,33 @@ function suggestForFlatVerb(
     case 'lls':
       return filterByPartial(completePaths(partial), partial);
 
+    case 'ls':
+    case 'dir':
+    case 'list':
+      // `ls` accepts an optional remote path; complete dirs first.
+      if (positional.length === 0) {
+        return filterByPartial(completeRemotePaths(ctx, partial, 'all'), partial);
+      }
+      return [];
+
+    case 'cd':
+      // `cd` only ever names a directory.
+      if (positional.length === 0) {
+        return filterByPartial(completeRemotePaths(ctx, partial, 'dirs'), partial);
+      }
+      return [];
+
+    case 'mkdir':
+      // `mkdir <path>` — typing into an existing dir is common, so we
+      // surface dirs to support `mkdir parent/<TAB>` flows.
+      if (positional.length === 0) {
+        return filterByPartial(completeRemotePaths(ctx, partial, 'dirs'), partial);
+      }
+      return [];
+
     case 'get': {
       if (positional.length === 0) {
-        return filterByPartial(activeFileNames(ctx), partial);
+        return filterByPartial(completeRemotePaths(ctx, partial, 'all'), partial);
       }
       if (positional.length === 1) {
         return filterByPartial(completePaths(partial), partial);
@@ -320,7 +408,7 @@ function suggestForFlatVerb(
         return filterByPartial(completePaths(partial), partial);
       }
       if (positional.length === 1) {
-        return filterByPartial(activeFileNames(ctx), partial);
+        return filterByPartial(completeRemotePaths(ctx, partial, 'all'), partial);
       }
       return [];
     }
@@ -328,28 +416,21 @@ function suggestForFlatVerb(
     case 'rm':
     case 'delete':
     case 'del':
-    case 'remove': {
-      return filterByPartial(activeFileNames(ctx), partial);
-    }
+    case 'remove':
+      return filterByPartial(completeRemotePaths(ctx, partial, 'all'), partial);
 
     case 'mv':
-    case 'rename': {
-      if (positional.length === 0) {
-        return filterByPartial(activeFileNames(ctx), partial);
-      }
-      if (positional.length === 1) {
-        return filterByPartial(activeFileNames(ctx), partial);
+    case 'rename':
+      if (positional.length === 0 || positional.length === 1) {
+        return filterByPartial(completeRemotePaths(ctx, partial, 'all'), partial);
       }
       return [];
-    }
 
-    case 'mget': {
-      return filterByPartial(activeFileNames(ctx), partial);
-    }
+    case 'mget':
+      return filterByPartial(completeRemotePaths(ctx, partial, 'all'), partial);
 
-    case 'mput': {
+    case 'mput':
       return filterByPartial(completePaths(partial), partial);
-    }
 
     case 'open':
     case 'setup':
@@ -362,6 +443,13 @@ function suggestForFlatVerb(
       return filterByPartial(knownSecrets(ctx), partial);
 
     default:
+      // Fallback: try the legacy remote-name list for forward compatibility.
+      if (REMOTE_NAME_VERBS.has(verb)) {
+        return filterByPartial(activeFileNames(ctx), partial);
+      }
+      if (LOCAL_PATH_VERBS.has(verb)) {
+        return filterByPartial(completePaths(partial), partial);
+      }
       return [];
   }
 }

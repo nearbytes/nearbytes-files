@@ -1,19 +1,36 @@
 /**
- * Interactive REPL (Read-Eval-Print Loop) for the Nearbytes file CLI.
+ * Interactive REPL for the Nearbytes file CLI — FTP/SFTP-style grammar.
  *
- * Launched with `nbf repl [--data-dir <d>]`.
- * Maintains a persistent Context across commands — opened volumes stay open.
+ * Launched with `nbf repl [--data-dir <d>]`. Keeps a persistent Context so
+ * open volumes, the active volume, watchers, and sync handles all survive
+ * across commands.
  *
- * Command grammar is deliberately minimal:
- *   <verb> [<noun>] [<args>...]   — positional; flags are for one-shot mode only
+ * Grammar (all positional; `-s <secret>` overrides the active volume):
  *
- * Examples:
- *   setup myvolume:password
- *   volume open myvolume:password
- *   file add /path/to/file.txt readme.txt
- *   file list
- *   file get readme.txt /tmp/out.txt
- *   file rm readme.txt
+ *   ls | dir | list             list remote files
+ *   get <remote> [local]        download
+ *   put <local> [remote]        upload
+ *   mget <pat>... [-d <dir>]    multi-download (* ? globs)
+ *   mput <pat>...               multi-upload   (* ? globs, expanded locally)
+ *   rm  | delete | del          delete remote
+ *   mv  | rename <from> <to>    rename remote
+ *
+ *   lpwd / lcd [path] / lls     local-filesystem navigation
+ *   pwd                         show active volume identity (FTP semantics)
+ *
+ *   open <secret>               open and activate a volume   (alias: volume open)
+ *   close                       close the active volume
+ *   use <key|secret>            switch the active volume
+ *   volumes                     list open volumes
+ *
+ *   setup / info / timeline / refresh / profile … / friend …
+ *
+ *   help / bye / quit / exit / ^D
+ *
+ * The literal `file` prefix is accepted and silently stripped, so
+ * `file get x` and `get x` are the same command. Tab completion lives in
+ * `replCompleter.ts`; the exit-time sync flush lives in
+ * `flushAndStop()` (see `commands.ts`).
  */
 
 import * as readline from 'readline';
@@ -41,6 +58,15 @@ import {
   cmdProfileShow,
   cmdProfilePublish,
   cmdProfileRemove,
+  cmdMget,
+  cmdMput,
+  cmdRename,
+  cmdLcd,
+  cmdLls,
+  cmdLpwd,
+  cmdPwd,
+  cmdClose,
+  flushAndStop,
 } from './commands.js';
 import type { Context } from './context.js';
 import { createReplCompleter } from './replCompleter.js';
@@ -53,27 +79,9 @@ import {
 import { installReplInterruptHandlers } from './replTerminal.js';
 
 // ---------------------------------------------------------------------------
-// Tokeniser
+// Tokeniser (bash-style; identical semantics to before)
 // ---------------------------------------------------------------------------
 
-/**
- * Shell-style tokenizer.
- *
- * Splits a REPL input line into argv tokens with bash-like rules:
- *
- *   - Single-quoted strings are taken literally; backslashes inside them
- *     are not escapes (`'a\b'` -> `a\b`).
- *   - Double-quoted strings allow `\"`, `\\`, `` \` ``, and `\$` escapes;
- *     other backslashes are kept literal (bash semantics).
- *   - Outside any quote, an unescaped backslash escapes the next character
- *     (so `foo\ bar` -> the single token `foo bar`; `\\` -> `\`).
- *   - An empty quoted string (`""` or `''`) still produces an empty token.
- *   - Unterminated quotes raise an error rather than swallowing the rest
- *     of the line silently.
- *
- * This matches what users get from bash/zsh when they tab-complete a path
- * with spaces (`Downloads/WhatsApp\ Image\ …`) or paste a quoted path.
- */
 function tokenise(line: string): string[] {
   const tokens: string[] = [];
   let current = '';
@@ -138,74 +146,224 @@ class ExitReplSignal extends Error {
 }
 
 // ---------------------------------------------------------------------------
+// Flag / option extraction
+// ---------------------------------------------------------------------------
+
+/**
+ * Pulls out `-s <val> | --secret <val>` and `-d <val> | --dest <val>` flags
+ * from the token list, returning the remaining positional args. Order-
+ * independent: a flag may appear anywhere on the line. Unknown `-x` flags
+ * are passed through as positional so callers can surface their own error.
+ */
+function extractFlags(tokens: readonly string[]): {
+  positional: string[];
+  secret?: string;
+  dest?: string;
+} {
+  const positional: string[] = [];
+  let secret: string | undefined;
+  let dest: string | undefined;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]!;
+    if ((t === '-s' || t === '--secret') && tokens[i + 1] !== undefined) {
+      secret = tokens[i + 1];
+      i += 1;
+    } else if ((t === '-d' || t === '--dest') && tokens[i + 1] !== undefined) {
+      dest = tokens[i + 1];
+      i += 1;
+    } else {
+      positional.push(t);
+    }
+  }
+  const out: { positional: string[]; secret?: string; dest?: string } = { positional };
+  if (secret !== undefined) out.secret = secret;
+  if (dest !== undefined) out.dest = dest;
+  return out;
+}
+
+function resolveSecret(ctx: Context, override: string | undefined): string {
+  if (override !== undefined) return override;
+  if (ctx.activeVolume) return ctx.activeVolume.volume.secret as string;
+  throw new Error('No active volume — `open <secret>` or pass -s <secret>');
+}
+
+// ---------------------------------------------------------------------------
 // Dispatcher
 // ---------------------------------------------------------------------------
 
 async function dispatch(ctx: Context, tokens: string[]): Promise<void> {
   if (tokens.length === 0) return;
 
-  const [verb, ...rest] = tokens;
+  /**
+   * Optional `file` prefix: `file get x` and `get x` are the same command.
+   * Strip it before lowering; do NOT strip if the next token is missing
+   * (so a bare `file` is treated as an unknown verb and printed as help).
+   */
+  const stripped =
+    tokens[0]!.toLowerCase() === 'file' && tokens.length > 1 ? tokens.slice(1) : tokens;
+  const [verb, ...rest] = stripped;
+  const lower = verb!.toLowerCase();
 
-  switch (verb.toLowerCase()) {
+  switch (lower) {
     // ---- meta ----
     case 'help':
+    case '?':
       cmdHelp();
-      break;
+      return;
 
     case 'exit':
     case 'quit':
+    case 'bye':
       throw new ExitReplSignal();
-      break;
 
-    // ---- setup ----
+    // ---- file transfer (FTP/SFTP) ----
+    case 'ls':
+    case 'dir':
+    case 'list': {
+      const { secret } = extractFlags(rest);
+      await cmdFileList(ctx, resolveSecret(ctx, secret));
+      return;
+    }
+
+    case 'get': {
+      const { positional, secret } = extractFlags(rest);
+      const [remote, local] = positional;
+      if (!remote) throw new Error('Usage: get <remote> [local]');
+      await cmdFileGet(ctx, remote, resolveSecret(ctx, secret), local);
+      return;
+    }
+
+    case 'put':
+    case 'add':
+    case 'upload': {
+      const { positional, secret } = extractFlags(rest);
+      const [local, remote] = positional;
+      if (!local) throw new Error('Usage: put <local> [remote]');
+      await cmdFileAdd(ctx, local, resolveSecret(ctx, secret), remote);
+      return;
+    }
+
+    case 'rm':
+    case 'delete':
+    case 'del':
+    case 'remove': {
+      const { positional, secret } = extractFlags(rest);
+      const [name] = positional;
+      if (!name) throw new Error('Usage: rm <remote>');
+      await cmdFileRemove(ctx, name, resolveSecret(ctx, secret));
+      return;
+    }
+
+    case 'mv':
+    case 'rename': {
+      const { positional, secret } = extractFlags(rest);
+      const [from, to] = positional;
+      if (!from || !to) throw new Error('Usage: mv <from> <to>');
+      await cmdRename(ctx, from, to, resolveSecret(ctx, secret));
+      return;
+    }
+
+    case 'mget': {
+      const { positional, secret, dest } = extractFlags(rest);
+      if (positional.length === 0) throw new Error('Usage: mget <name|pattern>... [-d <dir>]');
+      await cmdMget(ctx, positional, resolveSecret(ctx, secret), dest);
+      return;
+    }
+
+    case 'mput': {
+      const { positional, secret } = extractFlags(rest);
+      if (positional.length === 0) throw new Error('Usage: mput <local|pattern>...');
+      await cmdMput(ctx, positional, resolveSecret(ctx, secret));
+      return;
+    }
+
+    // ---- local-filesystem navigation ----
+    case 'lpwd':
+      cmdLpwd();
+      return;
+
+    case 'lcd':
+      cmdLcd(rest[0]);
+      return;
+
+    case 'lls':
+      await cmdLls(rest[0]);
+      return;
+
+    case 'pwd':
+      await cmdPwd(ctx);
+      return;
+
+    // ---- volume connections ----
+    case 'open': {
+      const [secret] = rest;
+      if (!secret) throw new Error('Usage: open <secret>');
+      await cmdVolumeOpen(ctx, secret);
+      const lastKey = [...ctx.volumes.keys()].at(-1);
+      if (lastKey !== undefined) {
+        ctx.activeVolume = ctx.volumes.get(lastKey) ?? null;
+      }
+      return;
+    }
+
+    case 'close':
+    case 'disconnect':
+      await cmdClose(ctx);
+      return;
+
+    case 'use': {
+      const [target] = rest;
+      if (!target) throw new Error('Usage: use <key-prefix|secret>');
+      await cmdUse(ctx, target);
+      return;
+    }
+
+    case 'volumes':
+      await cmdVolumes(ctx);
+      return;
+
     case 'setup': {
       const [secret] = rest;
       if (!secret) throw new Error('Usage: setup <secret>');
       await cmdSetup(ctx, secret);
-      break;
+      return;
     }
 
-    // ---- volume ----
     case 'volume': {
       const [subverb, ...subargs] = rest;
       if (!subverb || subverb === 'open') {
         const [secret] = subargs.length > 0 ? subargs : rest;
         if (!secret) throw new Error('Usage: volume open <secret>');
         await cmdVolumeOpen(ctx, secret);
+        const lastKey = [...ctx.volumes.keys()].at(-1);
+        if (lastKey !== undefined) {
+          ctx.activeVolume = ctx.volumes.get(lastKey) ?? null;
+        }
+      } else if (subverb === 'close') {
+        await cmdClose(ctx);
       } else if (subverb === 'info' || subverb === 'show') {
         await cmdVolumeInfo(ctx);
       } else {
         throw new Error(`Unknown volume sub-command: ${subverb}`);
       }
-      break;
-    }
-
-    case 'volumes':
-      await cmdVolumes(ctx);
-      break;
-
-    case 'use': {
-      const [target] = rest;
-      if (!target) throw new Error('Usage: use <key-prefix|secret>');
-      await cmdUse(ctx, target);
-      break;
+      return;
     }
 
     case 'info':
       await cmdVolumeInfo(ctx);
-      break;
+      return;
 
     case 'refresh':
       await cmdRefresh(ctx);
-      break;
+      return;
 
     case 'timeline': {
-      const secret = resolveSecret(ctx, rest);
-      await cmdTimeline(ctx, secret);
-      break;
+      const { secret } = extractFlags(rest);
+      await cmdTimeline(ctx, resolveSecret(ctx, secret));
+      return;
     }
 
-    // ---- profile ----
+    // ---- profile / friend ----
     case 'profile': {
       const [subverb, ...subargs] = rest;
       switch ((subverb ?? '').toLowerCase()) {
@@ -213,22 +371,22 @@ async function dispatch(ctx: Context, tokens: string[]): Promise<void> {
           const [name, secret] = subargs;
           if (!name || !secret) throw new Error('Usage: profile add <name> <secret>');
           await cmdProfileAdd(ctx, name, secret);
-          break;
+          return;
         }
         case 'use': {
           const [name] = subargs;
           if (!name) throw new Error('Usage: profile use <name>');
           await cmdProfileUse(ctx, name);
-          break;
+          return;
         }
         case 'list':
         case 'ls':
           await cmdProfileList(ctx);
-          break;
+          return;
         case 'show': {
           const [name] = subargs;
           await cmdProfileShow(ctx, name);
-          break;
+          return;
         }
         case 'publish': {
           const positional: string[] = [];
@@ -252,7 +410,7 @@ async function dispatch(ctx: Context, tokens: string[]): Promise<void> {
             bioParts.length > 0 ? bioParts.join(' ') : undefined,
             asName,
           );
-          break;
+          return;
         }
         case 'remove':
         case 'rm':
@@ -261,27 +419,25 @@ async function dispatch(ctx: Context, tokens: string[]): Promise<void> {
           const [name] = subargs;
           if (!name) throw new Error('Usage: profile remove <name>');
           await cmdProfileRemove(ctx, name);
-          break;
+          return;
         }
         default:
           throw new Error(`Unknown profile sub-command: ${subverb ?? '(none)'}`);
       }
-      break;
     }
 
-    // ---- friends ----
     case 'friend': {
       const [subverb, ...subargs] = rest;
       switch ((subverb ?? '').toLowerCase()) {
         case 'list':
         case 'ls':
           await cmdFriendList(ctx);
-          break;
+          return;
         case 'add': {
           const [pk] = subargs;
           if (!pk) throw new Error('Usage: friend add <profile-public-key-hex>');
           await cmdFriendAdd(ctx, pk);
-          break;
+          return;
         }
         case 'remove':
         case 'rm':
@@ -290,78 +446,22 @@ async function dispatch(ctx: Context, tokens: string[]): Promise<void> {
           const [pk] = subargs;
           if (!pk) throw new Error('Usage: friend remove <profile-public-key-hex|prefix>');
           await cmdFriendRemove(ctx, pk);
-          break;
+          return;
         }
         case 'show': {
           const [pk] = subargs;
           if (!pk) throw new Error('Usage: friend show <profile-public-key-hex>');
           await cmdFriendShow(ctx, pk);
-          break;
+          return;
         }
         default:
           throw new Error(`Unknown friend sub-command: ${subverb ?? '(none)'}`);
       }
-      break;
-    }
-
-    // ---- file ----
-    case 'file': {
-      const [subverb, ...subargs] = rest;
-      switch ((subverb ?? '').toLowerCase()) {
-        case 'add': {
-          const [filePath, name] = subargs;
-          if (!filePath) throw new Error('Usage: file add <path> [name]');
-          const secret = resolveSecret(ctx, subargs);
-          await cmdFileAdd(ctx, filePath, secret, name && !name.startsWith('-') ? name : undefined);
-          break;
-        }
-        case 'list':
-        case 'ls': {
-          const secret = resolveSecret(ctx, subargs);
-          await cmdFileList(ctx, secret);
-          break;
-        }
-        case 'get': {
-          const [fileName, outputPath] = subargs;
-          if (!fileName || !outputPath) throw new Error('Usage: file get <name> <output-path>');
-          const secret = resolveSecret(ctx, subargs);
-          await cmdFileGet(ctx, fileName, secret, outputPath);
-          break;
-        }
-        case 'rm':
-        case 'remove':
-        case 'del':
-        case 'delete': {
-          const [fileName] = subargs;
-          if (!fileName) throw new Error('Usage: file rm <name>');
-          const secret = resolveSecret(ctx, subargs);
-          await cmdFileRemove(ctx, fileName, secret);
-          break;
-        }
-        default:
-          throw new Error(`Unknown file sub-command: ${subverb ?? '(none)'}. Try "help".`);
-      }
-      break;
     }
 
     default:
-      throw new Error(`Unknown command: ${verb}. Type "help" for a list of commands.`);
+      throw new Error(`Unknown command: ${verb}. Type "help" for the command list.`);
   }
-}
-
-/**
- * Resolves the secret for a command: uses -s / --secret flag from the token
- * list, falls back to the active volume's secret, then throws.
- */
-function resolveSecret(ctx: Context, tokens: string[]): string {
-  const flagIdx = tokens.findIndex((t) => t === '-s' || t === '--secret');
-  if (flagIdx !== -1 && tokens[flagIdx + 1]) {
-    return tokens[flagIdx + 1]!;
-  }
-  if (ctx.activeVolume) {
-    return ctx.activeVolume.volume.secret as string;
-  }
-  throw new Error('No active volume and no -s <secret> provided');
 }
 
 // ---------------------------------------------------------------------------
@@ -389,7 +489,7 @@ export async function startRepl(ctx: Context): Promise<void> {
 
   console.log(
     bold('Nearbytes REPL') +
-      dim(' — Tab complete, ↑↓ history, ^R search, ^C cancel line, ^D exit'),
+      dim(' — FTP/SFTP-style commands · Tab complete · ↑↓ history · ^R search · ^D / bye to exit'),
   );
   console.log(dim(`  History: ${historySession.lines.length} entries (saved on exit)`));
   if (ctx.config.profiles.length === 0) {
@@ -405,52 +505,93 @@ export async function startRepl(ctx: Context): Promise<void> {
     console.log('');
     console.log(
       dim(
-        `  Profiles served: ${ctx.config.profiles.length} (active: ${bold(active)}). Sync syncs all of them.`,
+        `  Profiles served: ${ctx.config.profiles.length} (active: ${bold(active)}). Sync runs for all of them.`,
       ),
     );
   }
   console.log('');
 
-  // If the user pre-configured volumes in config, open them now.
   for (const vc of ctx.config.volumes) {
     try {
       await cmdVolumeOpen(ctx, vc.secret);
-      // Make the last opened volume active
       const lastKey = [...ctx.volumes.keys()].at(-1);
       if (lastKey !== undefined) {
         ctx.activeVolume = ctx.volumes.get(lastKey) ?? null;
       }
     } catch {
-      // Non-fatal — volume may not exist on disk yet
+      // Non-fatal — volume may not exist on disk yet.
     }
   }
 
   rl.prompt();
 
+  /**
+   * Serialise line handling. Without this, piped input (`echo … | nbf repl`)
+   * fires `line` events back-to-back and we'd dispatch concurrently, racing
+   * later commands against earlier ones (e.g. `ls` running before `open`
+   * resolved). A single tail promise per REPL preserves the "type one, see
+   * the result, type the next" invariant that interactive users rely on,
+   * with zero overhead on a real TTY because lines arrive one at a time.
+   */
+  let dispatchChain: Promise<void> = Promise.resolve();
+
   rl.on('line', (line) => {
     historySession.remember(line);
 
-    const tokens = tokenise(line);
-    if (tokens.length === 0) { rl.prompt(); return; }
+    dispatchChain = dispatchChain.then(async () => {
+      let tokens: string[];
+      try {
+        tokens = tokenise(line);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(red(`✗ ${msg}`));
+        rl.prompt();
+        return;
+      }
+      if (tokens.length === 0) {
+        rl.prompt();
+        return;
+      }
 
-    dispatch(ctx, tokens)
-      .then(() => rl.prompt())
-      .catch((err: unknown) => {
+      try {
+        await dispatch(ctx, tokens);
+        rl.prompt();
+      } catch (err) {
         if (err instanceof ExitReplSignal) {
-          void ctx.destroy().then(() => rl.close());
+          rl.close();
           return;
         }
         const msg = err instanceof Error ? err.message : String(err);
         console.error(red(`✗ ${msg}`));
         rl.prompt();
-      });
+      }
+    });
   });
 
   rl.on('close', () => {
+    /**
+     * Close handler runs after `ExitReplSignal`, `^D`, or readline aborting.
+     * We:
+     *   1. Flush history immediately (cheap, synchronous-ish).
+     *   2. Install a one-shot ^C handler that turns Ctrl-C into "abort the
+     *      flush" instead of the default "SIGINT kills Node".
+     *   3. Poll sync.snapshot() until quiet or timeout — see flushAndStop.
+     *   4. Hard-stop sync (destroy) and exit 0.
+     */
     void historySession.flush().finally(() => {
       console.log('');
-      console.log(dim('Goodbye.'));
-      void ctx.destroy().then(() => process.exit(0));
+      const abortController = new AbortController();
+      const onSigint = (): void => abortController.abort();
+      process.once('SIGINT', onSigint);
+      void flushAndStop(ctx, { abortSignal: abortController.signal })
+        .catch((err) => {
+          console.error(red(`✗ shutdown error: ${err instanceof Error ? err.message : String(err)}`));
+        })
+        .finally(() => {
+          process.removeListener('SIGINT', onSigint);
+          console.log(dim('Goodbye.'));
+          process.exit(0);
+        });
     });
   });
 }

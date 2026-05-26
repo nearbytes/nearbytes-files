@@ -1,5 +1,17 @@
 /**
  * Context-aware tab completion for the nbf REPL.
+ *
+ * Designed to feel like sftp / lftp: every verb knows whether its next
+ * positional is a remote name (active volume's file list), a local path
+ * (current working directory + tilde expansion), a profile name, a friend
+ * key, or a free-form argument. `-s <secret>` / `-d <dir>` are recognised
+ * anywhere on the line; the literal `file` prefix is silently stripped so
+ * `file g<TAB>` behaves the same as `g<TAB>`.
+ *
+ * The completer is intentionally pessimistic when multiple readings are
+ * possible: it returns the union of likely candidates rather than guessing,
+ * matching readline's own behaviour of showing all options when a TAB does
+ * not uniquely commit.
  */
 
 import { readdirSync } from 'fs';
@@ -14,43 +26,65 @@ import {
 } from './paths.js';
 
 // ---------------------------------------------------------------------------
-// Command vocabulary
+// Command vocabulary (FTP/SFTP-style; flat — no required sub-command depth)
 // ---------------------------------------------------------------------------
 
 const TOP_LEVEL = [
-  'setup',
-  'profile',
-  'friend',
-  'volume',
-  'volumes',
+  // File transfer
+  'ls',
+  'dir',
+  'list',
+  'get',
+  'put',
+  'mget',
+  'mput',
+  'rm',
+  'delete',
+  'del',
+  'mv',
+  'rename',
+  // Local nav
+  'lpwd',
+  'lcd',
+  'lls',
+  'pwd',
+  // Connections
+  'open',
+  'close',
   'use',
+  'volumes',
+  'setup',
   'info',
   'timeline',
   'refresh',
-  'file',
+  // Identity / discovery
+  'profile',
+  'friend',
+  'volume',
+  // Session
   'help',
+  'bye',
   'exit',
   'quit',
+  // Legacy `file` prefix (still accepted)
+  'file',
 ] as const;
 
-const PROFILE_SUB = ['init', 'show', 'publish'] as const;
+const PROFILE_SUB = ['add', 'use', 'list', 'ls', 'show', 'publish', 'remove', 'rm'] as const;
 const FRIEND_SUB = ['list', 'ls', 'add', 'remove', 'rm', 'del', 'delete', 'show'] as const;
-
-const VOLUME_SUB = ['open', 'info', 'show'] as const;
-
-const FILE_SUB = ['add', 'list', 'ls', 'get', 'rm', 'remove', 'del', 'delete'] as const;
+const VOLUME_SUB = ['open', 'close', 'info', 'show'] as const;
 
 const SECRET_FLAGS = ['-s', '--secret'] as const;
+const DEST_FLAGS = ['-d', '--dest'] as const;
 
-const FILE_SUB_ALIASES: Record<string, string> = {
-  ls: 'list',
-  remove: 'rm',
-  del: 'rm',
-  delete: 'rm',
-};
+// Verbs whose first positional is a remote filename in the active volume.
+const REMOTE_NAME_VERBS = new Set(['ls', 'dir', 'list', 'get', 'rm', 'delete', 'del', 'mv', 'rename', 'mget']);
+
+// Verbs whose first positional is a local path.
+const LOCAL_PATH_VERBS = new Set(['put', 'add', 'upload', 'mput', 'lcd', 'lls']);
 
 // ---------------------------------------------------------------------------
-// Line parsing (aligned with repl tokenise)
+// Tokenisation aligned with repl.ts
 // ---------------------------------------------------------------------------
 
 export function parseCompletionInput(line: string): { prefix: string[]; partial: string } {
@@ -109,7 +143,7 @@ function quoteIfNeeded(value: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Dynamic candidates from session
+// Dynamic candidates from the live session
 // ---------------------------------------------------------------------------
 
 function knownSecrets(ctx: Context): string[] {
@@ -131,6 +165,19 @@ function activeFileNames(ctx: Context): string[] {
   return [...state.files.keys()].map(quoteIfNeeded);
 }
 
+function profileNames(ctx: Context): string[] {
+  return ctx.config.profiles.map((p) => p.name);
+}
+
+/**
+ * Filesystem path completion with tilde expansion and platform-correct
+ * separators. Mirrors the behaviour readline users expect from bash / zsh:
+ *   - `~`             → home directory
+ *   - `~/foo/`        → list of `~/foo/*`
+ *   - `./foo`         → relative to cwd, includes the `./` prefix back
+ *   - directories are returned with a trailing separator (so a second TAB
+ *     descends into them)
+ */
 function completePaths(partial: string): string[] {
   const home = userHomeDir();
   const tilde = partial.startsWith('~');
@@ -183,31 +230,152 @@ function completePaths(partial: string): string[] {
   }
 }
 
-function stripFlags(tokens: string[]): string[] {
+/**
+ * Strips `-s <val>` and `-d <val>` flags from a positional token list so the
+ * per-verb position logic operates on remaining positionals only. The
+ * `flagAwaitingValue` return tells the caller "the very last token was
+ * `-s` / `-d` and the partial slot is its value" — used to surface secret /
+ * directory candidates instead of remote/local filenames.
+ */
+function stripFlags(tokens: readonly string[]): { positional: string[]; flagAwaitingValue: 'secret' | 'dest' | null } {
   const out: string[] = [];
+  let flagAwaitingValue: 'secret' | 'dest' | null = null;
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]!;
     if (t === '-s' || t === '--secret') {
-      i++;
-      continue;
+      if (i === tokens.length - 1) flagAwaitingValue = 'secret';
+      else i += 1;
+    } else if (t === '-d' || t === '--dest') {
+      if (i === tokens.length - 1) flagAwaitingValue = 'dest';
+      else i += 1;
+    } else {
+      out.push(t);
     }
-    out.push(t);
   }
-  return out;
-}
-
-function fileSubCanonical(sub: string | undefined): string | undefined {
-  if (!sub) return undefined;
-  const lower = sub.toLowerCase();
-  return FILE_SUB_ALIASES[lower] ?? lower;
+  return { positional: out, flagAwaitingValue };
 }
 
 // ---------------------------------------------------------------------------
 // Suggestion engine
 // ---------------------------------------------------------------------------
 
+function suggestForFlatVerb(
+  ctx: Context,
+  verb: string,
+  argsAfterVerb: readonly string[],
+  partial: string,
+): string[] {
+  const { positional, flagAwaitingValue } = stripFlags(argsAfterVerb);
+
+  if (flagAwaitingValue === 'secret' && partial === '') {
+    return knownSecrets(ctx);
+  }
+  if (flagAwaitingValue === 'dest' && partial === '') {
+    return completePaths(partial);
+  }
+
+  if (partial.startsWith('-')) {
+    const flags: string[] = [];
+    flags.push(...SECRET_FLAGS);
+    if (verb === 'mget') flags.push(...DEST_FLAGS);
+    return filterByPartial(flags, partial);
+  }
+
+  switch (verb) {
+    case 'ls':
+    case 'dir':
+    case 'list':
+    case 'pwd':
+    case 'lpwd':
+    case 'volumes':
+    case 'info':
+    case 'refresh':
+    case 'close':
+    case 'disconnect':
+    case 'help':
+    case '?':
+    case 'bye':
+    case 'exit':
+    case 'quit':
+      return [];
+
+    case 'lcd':
+    case 'lls':
+      return filterByPartial(completePaths(partial), partial);
+
+    case 'get': {
+      if (positional.length === 0) {
+        return filterByPartial(activeFileNames(ctx), partial);
+      }
+      if (positional.length === 1) {
+        return filterByPartial(completePaths(partial), partial);
+      }
+      return [];
+    }
+
+    case 'put':
+    case 'add':
+    case 'upload': {
+      if (positional.length === 0) {
+        return filterByPartial(completePaths(partial), partial);
+      }
+      if (positional.length === 1) {
+        return filterByPartial(activeFileNames(ctx), partial);
+      }
+      return [];
+    }
+
+    case 'rm':
+    case 'delete':
+    case 'del':
+    case 'remove': {
+      return filterByPartial(activeFileNames(ctx), partial);
+    }
+
+    case 'mv':
+    case 'rename': {
+      if (positional.length === 0) {
+        return filterByPartial(activeFileNames(ctx), partial);
+      }
+      if (positional.length === 1) {
+        return filterByPartial(activeFileNames(ctx), partial);
+      }
+      return [];
+    }
+
+    case 'mget': {
+      return filterByPartial(activeFileNames(ctx), partial);
+    }
+
+    case 'mput': {
+      return filterByPartial(completePaths(partial), partial);
+    }
+
+    case 'open':
+    case 'setup':
+      return filterByPartial(knownSecrets(ctx), partial);
+
+    case 'use':
+      return filterByPartial([...volumeKeyPrefixes(ctx), ...knownSecrets(ctx)], partial);
+
+    case 'timeline':
+      return filterByPartial(knownSecrets(ctx), partial);
+
+    default:
+      return [];
+  }
+}
+
 function suggest(ctx: Context, prefix: string[], partial: string): string[] {
-  const [verb, ...rest] = prefix;
+  /**
+   * Optional `file` prefix. `file g<TAB>` and `g<TAB>` should both complete
+   * to `get`. We strip the literal `file` head and rebuild the verb context
+   * from the remaining prefix.
+   */
+  const normalizedPrefix =
+    prefix.length > 0 && prefix[0]!.toLowerCase() === 'file' ? prefix.slice(1) : prefix;
+
+  const [verb, ...rest] = normalizedPrefix;
   const lowerVerb = verb?.toLowerCase();
 
   if (!verb) {
@@ -215,155 +383,48 @@ function suggest(ctx: Context, prefix: string[], partial: string): string[] {
   }
 
   switch (lowerVerb) {
-    case 'help':
-    case 'exit':
-    case 'quit':
-    case 'volumes':
-    case 'info':
-    case 'refresh':
-    case 'timeline':
-      return filterByPartial(
-        [...SECRET_FLAGS, ...knownSecrets(ctx)],
-        partial,
-      );
-
-    case 'setup':
-      return filterByPartial(knownSecrets(ctx), partial);
-
     case 'profile': {
       const [sub] = rest;
-      if (!sub) {
-        return filterByPartial([...PROFILE_SUB], partial);
+      if (!sub) return filterByPartial([...PROFILE_SUB], partial);
+      const lowerSub = sub.toLowerCase();
+      if (lowerSub === 'use' || lowerSub === 'show' || lowerSub === 'remove' || lowerSub === 'rm') {
+        return filterByPartial(profileNames(ctx), partial);
       }
-      if (sub.toLowerCase() === 'init') {
-        return filterByPartial(knownSecrets(ctx), partial);
-      }
-      if (sub.toLowerCase() === 'publish') {
-        return filterByPartial([], partial);
-      }
+      if (lowerSub === 'add' || lowerSub === 'publish') return filterByPartial([], partial);
       return [];
     }
 
     case 'friend': {
       const [sub] = rest;
-      if (!sub) {
-        return filterByPartial([...FRIEND_SUB], partial);
-      }
+      if (!sub) return filterByPartial([...FRIEND_SUB], partial);
       const lowerSub = sub.toLowerCase();
-      if (lowerSub === 'list' || lowerSub === 'ls') {
-        return [];
-      }
+      if (lowerSub === 'list' || lowerSub === 'ls') return [];
       return filterByPartial([...ctx.config.friends], partial);
     }
 
-    case 'use':
-      return filterByPartial(
-        [...volumeKeyPrefixes(ctx), ...knownSecrets(ctx)],
-        partial,
-      );
-
     case 'volume': {
       const [sub] = rest;
-      if (!sub) {
-        return filterByPartial([...VOLUME_SUB], partial);
-      }
+      if (!sub) return filterByPartial([...VOLUME_SUB], partial);
       const lowerSub = sub.toLowerCase();
-      if (lowerSub === 'open') {
-        return filterByPartial(knownSecrets(ctx), partial);
-      }
-      if (lowerSub === 'info' || lowerSub === 'show') {
-        return [];
-      }
-      return filterByPartial([...VOLUME_SUB], partial);
-    }
-
-    case 'file': {
-      const [sub, ...args] = rest;
-      if (!sub) {
-        return filterByPartial([...FILE_SUB], partial);
-      }
-
-      const canon = fileSubCanonical(sub);
-      const positional = stripFlags(args);
-      const hasSecretFlag = args.includes('-s') || args.includes('--secret');
-      const flagValuePending =
-        (args[args.length - 1] === '-s' || args[args.length - 1] === '--secret') &&
-        partial === '';
-
-      if (partial === '-s' || partial.startsWith('-')) {
-        const flagHits = filterByPartial(
-          [...SECRET_FLAGS, ...knownSecrets(ctx)],
-          partial,
-        );
-        if (flagHits.length > 0) return flagHits;
-      }
-
-      if (flagValuePending || (hasSecretFlag && positional.length === 0)) {
-        return filterByPartial(knownSecrets(ctx), partial);
-      }
-
-      switch (canon) {
-        case 'add': {
-          if (positional.length === 0) {
-            return filterByPartial(completePaths(partial), partial);
-          }
-          if (positional.length === 1) {
-            const names = activeFileNames(ctx);
-            const flags = [...SECRET_FLAGS];
-            return filterByPartial(
-              [...names, ...flags, ...knownSecrets(ctx)],
-              partial,
-            );
-          }
-          return filterByPartial(
-            [...SECRET_FLAGS, ...knownSecrets(ctx)],
-            partial,
-          );
-        }
-
-        case 'list':
-          return filterByPartial(
-            [...SECRET_FLAGS, ...knownSecrets(ctx)],
-            partial,
-          );
-
-        case 'get': {
-          if (positional.length === 0) {
-            return filterByPartial(
-              [...activeFileNames(ctx), ...SECRET_FLAGS],
-              partial,
-            );
-          }
-          if (positional.length === 1) {
-            return filterByPartial(completePaths(partial), partial);
-          }
-          return filterByPartial(
-            [...SECRET_FLAGS, ...knownSecrets(ctx)],
-            partial,
-          );
-        }
-
-        case 'rm':
-          if (positional.length === 0) {
-            return filterByPartial(
-              [...activeFileNames(ctx), ...SECRET_FLAGS],
-              partial,
-            );
-          }
-          return filterByPartial(
-            [...SECRET_FLAGS, ...knownSecrets(ctx)],
-            partial,
-          );
-
-        default:
-          return filterByPartial([...FILE_SUB], partial);
-      }
+      if (lowerSub === 'open') return filterByPartial(knownSecrets(ctx), partial);
+      return [];
     }
 
     default:
-      return filterByPartial([...TOP_LEVEL], partial);
+      if (!lowerVerb) return filterByPartial([...TOP_LEVEL], partial);
+      return suggestForFlatVerb(ctx, lowerVerb, rest, partial);
   }
 }
+
+// Surface the per-verb category sets for tests / introspection.
+export const __vocab = {
+  TOP_LEVEL,
+  PROFILE_SUB,
+  FRIEND_SUB,
+  VOLUME_SUB,
+  REMOTE_NAME_VERBS,
+  LOCAL_PATH_VERBS,
+};
 
 // ---------------------------------------------------------------------------
 // Public completer factory

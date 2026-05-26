@@ -67,19 +67,24 @@ program
   .description('Nearbytes file CLI — encrypted file volumes on a cryptographic event log')
   .version('0.1.0')
   .option('-c, --config <path>', 'Config file path')
-  .option('-d, --data-dir <path>', 'Storage directory', defaultDataDir());
+  .option('-d, --data-dir <path>', 'Storage directory', defaultDataDir())
+  .option(
+    '-m, --monitor',
+    'Auto-activate the sticky live monitor when launching the REPL',
+    false,
+  );
 
 /**
  * Boot the interactive REPL. Shared by the explicit `repl` subcommand and
  * the no-subcommand default action below so `nbf` and `nbf repl` behave
  * identically. Keeping a single launch function means custom-flag handling
- * (`-d`, `-c`) can't drift between the two entry points.
+ * (`-d`, `-c`, `-m`) can't drift between the two entry points.
  */
 async function runRepl(): Promise<void> {
-  const opts = program.opts<{ config?: string; dataDir: string }>();
+  const opts = program.opts<{ config?: string; dataDir: string; monitor: boolean }>();
   const config = await readConfig(opts.config).catch(() => emptyConfig(opts.dataDir));
   const ctx = await createContext({ ...config, dataDir: opts.dataDir ?? config.dataDir });
-  await startRepl(ctx);
+  await startRepl(ctx, { autoMonitor: opts.monitor === true });
 }
 
 // ── repl ──────────────────────────────────────────────────────────────────

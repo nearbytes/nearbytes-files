@@ -11,7 +11,7 @@
  */
 
 import type * as readline from 'node:readline';
-import type { ConnectedPeer, SyncEvent, SyncSnapshot } from 'nearbytes-sync/node';
+import type { ConnectedPeer, SyncEvent, SyncSnapshot, SyncStats } from 'nearbytes-sync/node';
 import { readSyncStateBeacon } from 'nearbytes-sync/node';
 import type { Context } from './context.js';
 import { bold, cyan, dim, green, yellow, red } from './output.js';
@@ -189,6 +189,61 @@ function fmtBytes(bytes: number): string {
 }
 
 /**
+ * Bytes-per-second formatted for a dashboard cell. We pick the unit
+ * that keeps the integer part single-digit-ish so the column does not
+ * jitter wildly between frames (e.g. "12.3 KB/s" stays the right
+ * width whether the rate dips to "3.1 KB/s" or climbs to "98.7 KB/s").
+ */
+function fmtRate(bytesPerSec: number): string {
+  if (bytesPerSec < 1) return '0 B/s';
+  if (bytesPerSec < 1_024) return `${Math.round(bytesPerSec)} B/s`;
+  if (bytesPerSec < 1_048_576) return `${(bytesPerSec / 1_024).toFixed(1)} KB/s`;
+  if (bytesPerSec < 1_073_741_824) return `${(bytesPerSec / 1_048_576).toFixed(1)} MB/s`;
+  return `${(bytesPerSec / 1_073_741_824).toFixed(2)} GB/s`;
+}
+
+/**
+ * Render the throughput / lifetime-totals row as a single line. The
+ * row sits directly under the title bar so the operator's eye lands
+ * on it first when watching for transfer activity.
+ *
+ *   ↓ 12.3 KB/s  ·  145 blk · 12 evt · 2.1 MB        ↑ 8.7 KB/s · 87 blk · 1.4 MB
+ *
+ * Symbols mirror the per-event log so direction reads at a glance.
+ * `windowMs` is rendered in dim text so the user knows what "/s"
+ * actually averages over.
+ */
+function renderThroughputRow(stats: SyncStats): string {
+  const winLabel = dim(`/ ${Math.round(stats.windowMs / 1000)}s avg`);
+  const inBlock =
+    green(`↓ ${fmtRate(stats.bytesPerSecIn).padEnd(10)}`) +
+    dim(' · ') +
+    `${String(stats.totalBlocksIn).padStart(4)} ${dim('blk')}` +
+    dim(' · ') +
+    `${String(stats.totalEventsIn).padStart(3)} ${dim('evt')}` +
+    dim(' · ') +
+    bold(fmtBytes(stats.totalBytesIn));
+  const outBlock =
+    cyan(`↑ ${fmtRate(stats.bytesPerSecOut).padEnd(10)}`) +
+    dim(' · ') +
+    `${String(stats.totalBlocksOut).padStart(4)} ${dim('blk')}` +
+    dim(' · ') +
+    bold(fmtBytes(stats.totalBytesOut));
+  return '  ' + inBlock + '   ' + dim('│') + '   ' + outBlock + '  ' + winLabel;
+}
+
+const ZERO_STATS: SyncStats = {
+  totalBytesIn: 0,
+  totalBytesOut: 0,
+  totalBlocksIn: 0,
+  totalBlocksOut: 0,
+  totalEventsIn: 0,
+  bytesPerSecIn: 0,
+  bytesPerSecOut: 0,
+  windowMs: 5_000,
+};
+
+/**
  * Format a single event into a one-line, colour-coded log entry. The
  * symbols are intentionally non-textual ("+", "−", "↑", "↓", "⊕") so a
  * fast scan of the column shows direction even before the eye parses
@@ -281,6 +336,13 @@ interface MonitorState {
    * absent for older daemons; treated as an empty list).
    */
   readonly events: readonly SyncEvent[];
+  /**
+   * Cumulative + windowed throughput counters from whichever source
+   * we read. Older daemons that omit `stats` from their beacon are
+   * surfaced as `ZERO_STATS`, NOT as an error — the UI degrades to
+   * "no throughput numbers yet" rather than refusing to render.
+   */
+  readonly stats: SyncStats;
   /** Where this state came from: our own sync engine, or the daemon's beacon. */
   readonly mode: 'local' | 'beacon' | 'beacon-stale' | 'beacon-missing';
   /** Beacon age in ms (only set in beacon modes). */
@@ -313,6 +375,7 @@ async function readMonitorState(ctx: Context): Promise<MonitorState> {
       snapshot: sync.snapshot(),
       peers: sync.peers(),
       events: sync.recentEvents(),
+      stats: sync.stats(),
       mode: 'local',
     };
   }
@@ -322,6 +385,7 @@ async function readMonitorState(ctx: Context): Promise<MonitorState> {
       snapshot: { inflightInbound: 0, inflightOutbound: 0, connectedPeers: 0 },
       peers: [],
       events: [],
+      stats: ZERO_STATS,
       mode: 'beacon-missing',
       beaconPid: daemon.holderPid,
     };
@@ -344,6 +408,11 @@ async function readMonitorState(ctx: Context): Promise<MonitorState> {
      * title bar (DAEMON vs DAEMON?) already conveys beacon health.
      */
     events: beacon.payload.events ?? [],
+    /**
+     * Older daemons did not include `stats` either; same back-compat
+     * policy — surface zeroed counters instead of refusing to render.
+     */
+    stats: beacon.payload.stats ?? ZERO_STATS,
     mode,
     beaconAgeMs: beacon.ageMs,
     beaconPid: beacon.payload.pid,
@@ -397,6 +466,7 @@ export async function cmdPeers(ctx: Context): Promise<void> {
   console.log(bold('Sync state') + '   ' + describeMode(state));
   console.log(dim('─'.repeat(60)));
   console.log('  ' + renderSummary(state.snapshot, state.peers.length));
+  console.log(renderThroughputRow(state.stats));
   console.log('');
   console.log(bold('Connected peers'));
   console.log(dim('─'.repeat(60)));
@@ -454,6 +524,7 @@ function renderStickyPaneLines(
 
   const lines: string[] = [];
   lines.push(title + trail);
+  lines.push(renderThroughputRow(state.stats));
 
   // Peer table (cap so the events region keeps at least 3 rows).
   const PEER_TABLE_OVERHEAD = 2; // header + separator
@@ -461,7 +532,7 @@ function renderStickyPaneLines(
   const MIN_EVENT_ROWS = 3;
   const peerBudget = Math.max(
     0,
-    height - 1 /* title */ - PEER_TABLE_OVERHEAD - ACTIVITY_OVERHEAD - MIN_EVENT_ROWS,
+    height - 2 /* title + throughput */ - PEER_TABLE_OVERHEAD - ACTIVITY_OVERHEAD - MIN_EVENT_ROWS,
   );
   const cappedRows = rows.slice(0, Math.max(1, peerBudget));
   const peerLines = renderPeerTableLines(cappedRows);
@@ -487,12 +558,12 @@ function renderStickyPaneLines(
  * Compute the sticky pane height for the current terminal size. We
  * want the pane to feel substantial but never starve the REPL of
  * scrolling room. Heuristic: take ~40% of the terminal, clamped to
- * [12, 22] rows. The minimum 12 is the smallest layout that still
- * fits the title + peer table + activity heading + 3 event lines.
+ * [13, 22] rows. The minimum 13 is the smallest layout that still
+ * fits title + throughput + peer table + activity heading + 3 events.
  */
 function computePaneHeight(termRows: number): number {
   const ideal = Math.floor(termRows * 0.4);
-  return Math.max(12, Math.min(22, ideal));
+  return Math.max(13, Math.min(22, ideal));
 }
 
 interface StickyMonitorHandle {

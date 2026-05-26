@@ -502,7 +502,18 @@ async function dispatch(ctx: Context, tokens: string[], rl: readline.Interface):
 // REPL loop
 // ---------------------------------------------------------------------------
 
-export async function startRepl(ctx: Context): Promise<void> {
+export interface StartReplOptions {
+  /**
+   * When true, mount the sticky live monitor automatically after the
+   * REPL has settled (volumes opened, prompt drawn). Wired to the
+   * `-m/--monitor` flag on `nbf`/`nbf repl` so the user can boot
+   * straight into "I want to watch sync happen" without typing the
+   * `monitor` verb manually.
+   */
+  readonly autoMonitor?: boolean;
+}
+
+export async function startRepl(ctx: Context, opts: StartReplOptions = {}): Promise<void> {
   const initialHistory = await loadReplHistory();
   const historySession = createReplHistorySession(initialHistory);
 
@@ -558,6 +569,27 @@ export async function startRepl(ctx: Context): Promise<void> {
   }
 
   rl.prompt();
+
+  /**
+   * If the user passed `-m/--monitor`, auto-mount the sticky overlay
+   * right after the prompt is drawn. We do it on the next tick (not
+   * synchronously) so the "Nearbytes REPL — …" banner and the
+   * profile/volume summary land *before* the overlay takes the top
+   * rows — otherwise the banner would scroll above the overlay and
+   * disappear immediately on the first redraw.
+   *
+   * Errors are swallowed (with a dim notice) rather than bubbled:
+   * monitor activation is convenience, not correctness, and a stalled
+   * boot should never block the REPL from accepting commands.
+   */
+  if (opts.autoMonitor === true) {
+    setImmediate(() => {
+      void cmdMonitor(ctx, { rl }).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(red(`✗ monitor auto-start failed: ${msg}`));
+      });
+    });
+  }
 
   /**
    * Serialise line handling. Without this, piped input (`echo … | nbf repl`)

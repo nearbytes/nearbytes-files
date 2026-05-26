@@ -867,6 +867,7 @@ ${cyan('Friends (asymmetric follow, shared across all profiles)')}
 ${cyan('Diagnostics (where is this block coming from?)')}
   peers                                  Snapshot of connected peers ${dim('(role, route, age, transport)')}
   monitor ${dim('[on|off]')} ${dim('/ top')}                 Toggle sticky live panel above the prompt ${dim('(REPL)')}
+                                         ${dim('Launch with `nbf -m` to mount the monitor on startup.')}
 
 ${cyan('Session')}
   help                                   Show this message

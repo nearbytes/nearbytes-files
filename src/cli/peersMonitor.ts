@@ -10,6 +10,7 @@
  * Both commands work in REPL mode and in one-shot mode (`nbf peers`).
  */
 
+import { networkInterfaces } from 'node:os';
 import type * as readline from 'node:readline';
 import type { ConnectedPeer, SyncEvent, SyncSnapshot, SyncStats } from 'nearbytes-sync/node';
 import { readSyncStateBeacon } from 'nearbytes-sync/node';
@@ -39,38 +40,133 @@ function fmtAge(connectedAt: Date, now: number): string {
   return `${hr}h${min % 60 ? ` ${min % 60}m` : ''}`;
 }
 
+// ── route classification (LAN / local / DHT) ──────────────────────────────
+
+/**
+ * Cached set of "this machine's addresses": loopback + every address
+ * advertised by every up local interface. We use this to recognise a
+ * peer as `local` even when the discovery layer announces the LAN IP
+ * (192.168.x) instead of 127.x — which is what mDNS does on macOS
+ * when broadcasting to siblings on the same machine.
+ *
+ * Refreshed lazily every {@link LOCAL_ADDR_TTL_MS} so VPN
+ * connects/disconnects, interface up/down, etc. eventually take
+ * effect without restarting the CLI.
+ */
+let cachedLocalAddrs: Set<string> | null = null;
+let cachedLocalAddrsAt = 0;
+const LOCAL_ADDR_TTL_MS = 5_000;
+
+function getLocalAddresses(): Set<string> {
+  const now = Date.now();
+  if (cachedLocalAddrs !== null && now - cachedLocalAddrsAt < LOCAL_ADDR_TTL_MS) {
+    return cachedLocalAddrs;
+  }
+  const set = new Set<string>(['127.0.0.1', '::1', 'localhost']);
+  for (const list of Object.values(networkInterfaces())) {
+    if (!list) continue;
+    for (const iface of list) {
+      set.add(iface.address.toLowerCase());
+    }
+  }
+  cachedLocalAddrs = set;
+  cachedLocalAddrsAt = now;
+  return set;
+}
+
+/**
+ * "Is this address served by an interface on this machine?" — used to
+ * promote LAN-looking peers to `local` when they are in fact running
+ * on the same host. Includes the standard loopback wildcards plus
+ * every address found in `os.networkInterfaces()`.
+ */
+function isLocalAddress(addr: string): boolean {
+  const lower = addr.toLowerCase();
+  if (lower.startsWith('127.') || lower === '::1' || lower === 'localhost') {
+    return true;
+  }
+  // IPv6 link-local prefix.
+  if (lower.startsWith('fe80:')) return true;
+  return getLocalAddresses().has(lower);
+}
+
+/**
+ * Pull the bare IP out of a transport label like
+ *
+ *   mdns-tcp:192.168.1.5:53432->041703b9
+ *   tcp:127.0.0.1:51999
+ *   mdns-tcp:fe80::1:53432
+ *
+ * Node's `socket.remoteAddress` is the un-bracketed form even for
+ * IPv6, so the port is the last colon-separated segment. We strip an
+ * optional `->profile` suffix first, then split on the last `:`.
+ * Returns `null` if the label does not carry the expected prefix.
+ */
+function extractIpFromLabel(label: string, prefix: string): string | null {
+  if (!label.startsWith(prefix)) return null;
+  const rest = label.slice(prefix.length);
+  const arrow = rest.indexOf('->');
+  const hostPort = arrow >= 0 ? rest.slice(0, arrow) : rest;
+  const lastColon = hostPort.lastIndexOf(':');
+  if (lastColon < 0) return hostPort.toLowerCase();
+  return hostPort.slice(0, lastColon).toLowerCase();
+}
+
 /**
  * Classify the transport label into a short, colour-coded "where from"
  * hint. The label itself is already authoritative; this is just a
  * human-friendly summary so the operator can answer at a glance:
  *
- *   loopback   — same machine, mDNS picked up our own daemon / sibling
- *   LAN        — different machine on the same subnet, mDNS-TCP
- *   DHT        — Hyperswarm routed; either local-DHT or WAN — typically WAN
- *   unknown    — fallback when the discovery layer did not tag the label
+ *   local   — same machine: a sibling on this host (different process /
+ *             dataDir / daemon). Detected by matching the remote IP
+ *             against the local interface table — so a sibling that
+ *             announces its LAN IP (192.168.x) instead of 127.x is
+ *             still correctly marked local.
+ *   LAN     — different machine on the same subnet, mDNS or mDNS-TCP.
+ *   DHT     — Hyperswarm routed; transport could be UDX or TCP, the
+ *             destination could be local or WAN — but typically WAN.
+ *   ?       — fallback when the discovery layer did not tag the label.
+ *
+ * Note: a sibling on the same machine reached over the DHT (because
+ * mDNS is blocked or both processes refuse mDNS) still classifies as
+ * `DHT` — the route label answers "how did we get there", not "where
+ * is the destination". For "is this peer local?", see the `local`
+ * column directly.
  */
 function classifyTransport(label: string): { route: string; tint: (s: string) => string } {
-  if (label.startsWith('mdns-tcp:')) {
-    const addr = label.slice('mdns-tcp:'.length);
-    if (
-      addr.startsWith('127.') ||
-      addr.startsWith('::1') ||
-      addr.startsWith('localhost')
-    ) {
-      return { route: 'loopback', tint: dim };
-    }
-    return { route: 'LAN', tint: green };
+  const mdnsTcpIp = extractIpFromLabel(label, 'mdns-tcp:');
+  if (mdnsTcpIp !== null) {
+    return isLocalAddress(mdnsTcpIp)
+      ? { route: 'local', tint: dim }
+      : { route: 'LAN', tint: green };
   }
   if (label.startsWith('mdns:')) return { route: 'LAN', tint: green };
   if (label.startsWith('hyperswarm:')) return { route: 'DHT', tint: cyan };
-  if (label.startsWith('tcp:')) {
-    const addr = label.slice('tcp:'.length);
-    if (addr.startsWith('127.') || addr.startsWith('::1')) {
-      return { route: 'loopback', tint: dim };
-    }
-    return { route: 'LAN', tint: green };
+  const tcpIp = extractIpFromLabel(label, 'tcp:');
+  if (tcpIp !== null) {
+    return isLocalAddress(tcpIp)
+      ? { route: 'local', tint: dim }
+      : { route: 'LAN', tint: green };
   }
   return { route: '?', tint: yellow };
+}
+
+/**
+ * Returns true when the peer is co-located on this machine. The
+ * detection mirrors `classifyTransport`'s `local` branch: an mDNS-TCP
+ * peer whose IP matches a local interface, or a plain TCP peer at
+ * 127.x. DHT-routed siblings on the same machine are *not* reported
+ * as local from this function because their wire label carries no IP
+ * to compare; if you want to detect those reliably, the peer's
+ * `localAssociationProfile === remoteProfilePublicKey` (sibling) plus
+ * a low ping is a heuristic.
+ */
+export function isPeerLocal(peer: ConnectedPeer): boolean {
+  const ip =
+    extractIpFromLabel(peer.transportLabel, 'mdns-tcp:') ??
+    extractIpFromLabel(peer.transportLabel, 'tcp:');
+  if (ip === null) return false;
+  return isLocalAddress(ip);
 }
 
 function shortHex(hex: string, n = 8): string {
@@ -153,9 +249,49 @@ function renderPeerTable(rows: readonly PeerRow[]): string {
   return renderPeerTableLines(rows).join('\n');
 }
 
-function renderSummary(snap: SyncSnapshot, peerCount: number): string {
+/**
+ * Tally peers by their classified route (`local`, `LAN`, `DHT`, `?`)
+ * so the title-bar summary can answer the question the operator
+ * usually has first — "are these blocks coming from another process
+ * on this machine, or from the wider network?" — without forcing them
+ * to scan the peer table.
+ */
+function countPeersByRoute(peers: readonly ConnectedPeer[]): {
+  local: number;
+  lan: number;
+  dht: number;
+  other: number;
+} {
+  let local = 0;
+  let lan = 0;
+  let dht = 0;
+  let other = 0;
+  for (const p of peers) {
+    const route = classifyTransport(p.transportLabel).route;
+    if (route === 'local') local += 1;
+    else if (route === 'LAN') lan += 1;
+    else if (route === 'DHT') dht += 1;
+    else other += 1;
+  }
+  return { local, lan, dht, other };
+}
+
+function renderSummary(snap: SyncSnapshot, peers: readonly ConnectedPeer[]): string {
+  const breakdown = countPeersByRoute(peers);
+  /**
+   * Only emit non-zero buckets. A connected peer with all four counts
+   * at zero is impossible (every peer falls into exactly one bucket),
+   * so suppressing zeroes keeps the line short when only one route is
+   * active without losing information.
+   */
+  const parts: string[] = [];
+  if (breakdown.local > 0) parts.push(dim(`${breakdown.local} local`));
+  if (breakdown.lan > 0) parts.push(green(`${breakdown.lan} LAN`));
+  if (breakdown.dht > 0) parts.push(cyan(`${breakdown.dht} DHT`));
+  if (breakdown.other > 0) parts.push(yellow(`${breakdown.other} ?`));
+  const breakdownStr = parts.length > 0 ? '  ' + dim('(') + parts.join(dim(' · ')) + dim(')') : '';
   return (
-    bold('peers ') + String(peerCount).padStart(2) + '  ' +
+    bold('peers ') + String(peers.length).padStart(2) + breakdownStr + '  ' +
     dim('·') + ' ' +
     bold('in ') + String(snap.inflightInbound).padStart(2) + '  ' +
     dim('·') + ' ' +
@@ -465,7 +601,7 @@ export async function cmdPeers(ctx: Context): Promise<void> {
   console.log('');
   console.log(bold('Sync state') + '   ' + describeMode(state));
   console.log(dim('─'.repeat(60)));
-  console.log('  ' + renderSummary(state.snapshot, state.peers.length));
+  console.log('  ' + renderSummary(state.snapshot, state.peers));
   console.log(renderThroughputRow(state.stats));
   console.log('');
   console.log(bold('Connected peers'));
@@ -516,7 +652,7 @@ function renderStickyPaneLines(
     dim('─ ') +
     describeMode(state) +
     dim(' ─ ') +
-    renderSummary(state.snapshot, state.peers.length) +
+    renderSummary(state.snapshot, state.peers) +
     dim(' ─ ') +
     dim(new Date().toLocaleTimeString());
   const visibleLen = (title.match(/[^\x1b]/g) || []).length;

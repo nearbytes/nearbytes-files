@@ -36,6 +36,7 @@ import {
   cmdProfileRemove,
   red,
 } from './commands.js';
+import { cmdPeers } from './peersMonitor.js';
 import { startRepl } from './repl.js';
 
 // ---------------------------------------------------------------------------
@@ -153,6 +154,21 @@ program
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(async () => {
       await cmdTimeline(ctx, opts.secret);
+      await ctx.destroy();
+    });
+  });
+
+// ── peers (diagnostics) ───────────────────────────────────────────────────
+
+program
+  .command('peers')
+  .description('Snapshot of currently-connected peers (role, route, age, transport)')
+  .action(async () => {
+    const gopts = program.opts<{ config?: string; dataDir: string }>();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+      cmdPeers(ctx);
       await ctx.destroy();
     });
   });

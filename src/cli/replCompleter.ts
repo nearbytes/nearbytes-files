@@ -63,6 +63,10 @@ const TOP_LEVEL = [
   'profile',
   'friend',
   'volume',
+  // Diagnostics
+  'peers',
+  'monitor',
+  'top',
   // Session
   'help',
   'bye',

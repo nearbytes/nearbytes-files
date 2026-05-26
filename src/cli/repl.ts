@@ -70,6 +70,7 @@ import {
   cmdClose,
   flushAndStop,
 } from './commands.js';
+import { cmdPeers, cmdMonitor } from './peersMonitor.js';
 import type { Context } from './context.js';
 import { createReplCompleter } from './replCompleter.js';
 import {
@@ -441,6 +442,16 @@ async function dispatch(ctx: Context, tokens: string[]): Promise<void> {
           throw new Error(`Unknown profile sub-command: ${subverb ?? '(none)'}`);
       }
     }
+
+    // ---- diagnostics ----
+    case 'peers':
+      cmdPeers(ctx);
+      return;
+
+    case 'monitor':
+    case 'top':
+      await cmdMonitor(ctx);
+      return;
 
     case 'friend': {
       const [subverb, ...subargs] = rest;

@@ -864,6 +864,10 @@ ${cyan('Friends (asymmetric follow, shared across all profiles)')}
   friend remove <key|prefix>             Stop following
   friend show <profile-pubkey>           Print a key for sharing
 
+${cyan('Diagnostics (where is this block coming from?)')}
+  peers                                  Snapshot of connected peers ${dim('(role, route, age, transport)')}
+  monitor ${dim('/ top')}                          Live htop-style panel; q/Enter/Esc/^C to exit
+
 ${cyan('Session')}
   help                                   Show this message
   bye ${dim('/ quit / exit / ^D')}                 Flush sync, then exit ${dim('(^C aborts the flush)')}

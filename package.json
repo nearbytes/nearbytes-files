@@ -42,7 +42,7 @@
     "build": "tsc",
     "type-check": "tsc --noEmit",
     "nbf": "tsc && node dist/cli/index.js",
-    "repl": "tsc && node dist/cli/index.js repl",
+    "repl": "tsc && node dist/cli/index.js",
     "update": "node scripts/update.mjs"
   },
   "license": "MIT",

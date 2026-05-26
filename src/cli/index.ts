@@ -68,17 +68,29 @@ program
   .option('-c, --config <path>', 'Config file path')
   .option('-d, --data-dir <path>', 'Storage directory', defaultDataDir());
 
+/**
+ * Boot the interactive REPL. Shared by the explicit `repl` subcommand and
+ * the no-subcommand default action below so `nbf` and `nbf repl` behave
+ * identically. Keeping a single launch function means custom-flag handling
+ * (`-d`, `-c`) can't drift between the two entry points.
+ */
+async function runRepl(): Promise<void> {
+  const opts = program.opts<{ config?: string; dataDir: string }>();
+  const config = await readConfig(opts.config).catch(() => emptyConfig(opts.dataDir));
+  const ctx = await createContext({ ...config, dataDir: opts.dataDir ?? config.dataDir });
+  await startRepl(ctx);
+}
+
 // ── repl ──────────────────────────────────────────────────────────────────
+//
+// REPL is also the default action (`program.action(runRepl)` at the bottom),
+// so `nbf -d /tmp/x` and `nbf -d /tmp/x repl` are equivalent. The explicit
+// subcommand stays for discoverability via `--help`.
 
 program
   .command('repl')
-  .description('Start an interactive REPL (interpreter mode)')
-  .action(async () => {
-    const opts = program.opts<{ config?: string; dataDir: string }>();
-    const config = await readConfig(opts.config).catch(() => emptyConfig(opts.dataDir));
-    const ctx = await createContext({ ...config, dataDir: opts.dataDir ?? config.dataDir });
-    await startRepl(ctx);
-  });
+  .description('Start an interactive REPL (default when no subcommand is given)')
+  .action(runRepl);
 
 // ── setup ─────────────────────────────────────────────────────────────────
 
@@ -353,6 +365,13 @@ friendCmd
     });
   });
 
-// ── parse ─────────────────────────────────────────────────────────────────
+// ── default action + parse ────────────────────────────────────────────────
+//
+// When the user runs `nbf` (or `nbf -d /tmp/x`) with no subcommand, drop
+// into the REPL. This is what makes `yarn repl -- -d /tmp/x` work after the
+// matching package.json change that dropped the hard-coded `repl` token
+// from the script line — yarn appends extra args to the END, so we can no
+// longer rely on having `repl` precede the flags.
 
+program.action(runRepl);
 program.parse();

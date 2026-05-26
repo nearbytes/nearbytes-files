@@ -33,10 +33,14 @@ When pushing changes to multiple Nearbytes repos at once, run `yarn update` + `g
 
 | Command | What it does |
 |---------|----------------|
-| `yarn repl` | Interactive REPL |
+| `yarn repl` | Interactive REPL (no subcommand → REPL is the default) |
+| `yarn repl -- -d <dir>` | REPL against a custom data directory |
 | `yarn nbf -- <args>` | One-shot command (e.g. `yarn nbf -- file list -s "myvol:pass"`) |
+| `yarn nbf -- -d <dir> <subcmd>` | Any subcommand against a custom data directory |
 | `yarn nbf repl` | Same as `yarn repl` |
 | `npx nbf …` | After install, if the `nbf` bin is linked |
+
+Global flags (`-c <config>`, `-d <data-dir>`) must precede the subcommand (or be passed alone for the REPL default).
 
 ### Secrets
 

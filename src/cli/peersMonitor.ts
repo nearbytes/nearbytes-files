@@ -153,7 +153,7 @@ function formatTransportEndpoint(label: string): string {
   const hp = parseHostPortFromLabel(label);
   if (hp !== null) {
     if (hp.host === 'unknown') {
-      return 'DHT';
+      return yellow('… resolving route');
     }
     const hostShown = hp.host.includes(':') ? `[${hp.host}]` : hp.host;
     return hp.port > 0 ? `${hostShown}:${hp.port}` : hostShown;
@@ -165,6 +165,76 @@ function formatTransportEndpoint(label: string): string {
     return 'mDNS';
   }
   return label.length > 28 ? `${label.slice(0, 28)}…` : label;
+}
+
+const ACTIVITY_ROLLUP_MS = 1_000;
+
+function transferPeerKey(e: SyncEvent): string | null {
+  switch (e.kind) {
+    case 'block-sent':
+      return e.toPeerId;
+    case 'block-received':
+    case 'event-received':
+      return e.fromPeerId;
+    default:
+      return null;
+  }
+}
+
+function canRollupTransfer(a: SyncEvent, b: SyncEvent): boolean {
+  if (a.kind !== b.kind) {
+    return false;
+  }
+  if (a.kind !== 'block-sent' && a.kind !== 'block-received' && a.kind !== 'event-received') {
+    return false;
+  }
+  const pa = transferPeerKey(a);
+  const pb = transferPeerKey(b);
+  if (pa === null || pa !== pb) {
+    return false;
+  }
+  return b.at - a.at <= ACTIVITY_ROLLUP_MS;
+}
+
+function fmtTransferLine(
+  kind: 'block-sent' | 'block-received' | 'event-received',
+  count: number,
+  bytes: number,
+  peerId: string,
+  hashSample: string,
+  at: number,
+): string {
+  const time = dim(fmtTime(at));
+  const peer = peerId.slice(0, 8);
+  const hash = hashSample.slice(0, 8);
+  const size = bold(fmtBytes(bytes));
+  const mult = count > 1 ? dim(` ×${count}`) : '';
+  switch (kind) {
+    case 'block-sent':
+      return (
+        time +
+        '  ' + cyan('↑ blk') + mult +
+        '  ' + hash +
+        '  ' + dim('→ ') + peer +
+        '  ' + size
+      );
+    case 'block-received':
+      return (
+        time +
+        '  ' + green('↓ blk') + mult +
+        '  ' + hash +
+        '  ' + dim('← ') + peer +
+        '  ' + size
+      );
+    case 'event-received':
+      return (
+        time +
+        '  ' + yellow('⊕ evt') + mult +
+        '  ' + hash +
+        '  ' + dim('← ') + peer +
+        '  ' + dim(size)
+      );
+  }
 }
 
 /**
@@ -498,68 +568,121 @@ function fmtEvent(e: SyncEvent): string {
         e.role === 'sibling' ? cyan('sibling') : yellow('friend ');
       return (
         time +
-        '  ' + green('+ peer connect   ') +
-        roleStr +
+        '  ' + green('+ conn') +
+        '  ' + roleStr +
         '  ' + e.remoteProfilePublicKey.slice(0, 8) +
-        '  ' + dim('@ ') + cyan(formatTransportEndpoint(e.transportLabel))
+        '  ' + cyan(formatTransportEndpoint(e.transportLabel))
       );
     }
     case 'peer-disconnected': {
       return (
         time +
-        '  ' + red('− peer disconn.  ') +
-        dim('       ') +
+        '  ' + red('− conn') +
+        '  ' + dim('       ') +
         '  ' + e.remoteProfilePublicKey.slice(0, 8) +
-        '  ' + dim('@ ') + dim(formatTransportEndpoint(e.transportLabel))
+        '  ' + dim(formatTransportEndpoint(e.transportLabel))
       );
     }
     case 'peer-connect-failed': {
       const who =
         e.remoteProfilePublicKey !== ''
-          ? '  ' + e.remoteProfilePublicKey.slice(0, 8)
-          : dim('       ');
-      const tries =
-        e.attempts > 1 ? dim(`  (${e.attempts} tries)`) : '';
+          ? e.remoteProfilePublicKey.slice(0, 8)
+          : dim('?');
+      const tries = e.attempts > 1 ? dim(` ×${e.attempts}`) : '';
       return (
         time +
-        '  ' + yellow('! connect failed ') +
-        dim(e.reason.padEnd(18)) +
-        who +
+        '  ' + yellow('! fail') +
+        '  ' + dim(e.reason) +
         tries +
-        '  ' + dim('@ ') + yellow(formatTransportEndpoint(e.transportLabel))
+        '  ' + who +
+        '  ' + yellow(formatTransportEndpoint(e.transportLabel))
       );
     }
-    case 'block-sent': {
-      return (
-        time +
-        '  ' + cyan('↑ block sent     ') +
-        dim('       ') +
-        '  ' + e.blockHash.slice(0, 8) +
-        '  ' + dim('→ ') + e.toPeerId.slice(0, 8) +
-        '  ' + bold(fmtBytes(e.bytes))
+    case 'block-sent':
+      return fmtTransferLine(
+        'block-sent',
+        1,
+        e.bytes,
+        e.toPeerId,
+        e.blockHash,
+        e.at,
       );
-    }
-    case 'block-received': {
-      return (
-        time +
-        '  ' + green('↓ block recv     ') +
-        dim('       ') +
-        '  ' + e.blockHash.slice(0, 8) +
-        '  ' + dim('← ') + e.fromPeerId.slice(0, 8) +
-        '  ' + bold(fmtBytes(e.bytes))
+    case 'block-received':
+      return fmtTransferLine(
+        'block-received',
+        1,
+        e.bytes,
+        e.fromPeerId,
+        e.blockHash,
+        e.at,
       );
-    }
-    case 'event-received': {
-      return (
-        time +
-        '  ' + yellow('⊕ event recv     ') +
-        dim('       ') +
-        '  ' + e.eventHash.slice(0, 8) +
-        '  ' + dim('← ') + e.fromPeerId.slice(0, 8) +
-        '  ' + dim(fmtBytes(e.bytes))
+    case 'event-received':
+      return fmtTransferLine(
+        'event-received',
+        1,
+        e.bytes,
+        e.fromPeerId,
+        e.eventHash,
+        e.at,
       );
-    }
   }
+}
+
+/**
+ * Collapse bursty block/event lines (same peer, same direction, within
+ * 1 s) so a sync storm reads as one row instead of fifty.
+ */
+function buildActivityLines(events: readonly SyncEvent[]): string[] {
+  const lines: string[] = [];
+  let i = 0;
+  while (i < events.length) {
+    const e = events[i]!;
+    if (
+      e.kind === 'block-sent' ||
+      e.kind === 'block-received' ||
+      e.kind === 'event-received'
+    ) {
+      const group: SyncEvent[] = [e];
+      i++;
+      while (i < events.length && canRollupTransfer(e, events[i]!)) {
+        group.push(events[i]!);
+        i++;
+      }
+      const first = group[0]!;
+      const last = group[group.length - 1]!;
+      const bytes = group.reduce((s, ev) => {
+        if (
+          ev.kind === 'block-sent' ||
+          ev.kind === 'block-received' ||
+          ev.kind === 'event-received'
+        ) {
+          return s + ev.bytes;
+        }
+        return s;
+      }, 0);
+      const peer = transferPeerKey(first) ?? '';
+      const hash =
+        last.kind === 'event-received'
+          ? last.eventHash
+          : last.kind === 'block-sent' || last.kind === 'block-received'
+            ? last.blockHash
+            : '';
+      lines.push(
+        fmtTransferLine(
+          first.kind as 'block-sent' | 'block-received' | 'event-received',
+          group.length,
+          bytes,
+          peer,
+          hash,
+          last.at,
+        ),
+      );
+      continue;
+    }
+    lines.push(fmtEvent(e));
+    i++;
+  }
+  return lines;
 }
 
 /**
@@ -570,10 +693,13 @@ function fmtEvent(e: SyncEvent): string {
  */
 function renderEventLogLines(events: readonly SyncEvent[], maxRows: number): string[] {
   if (events.length === 0) {
-    return [dim('  (no events yet — waiting for peer activity)')];
+    return [
+      dim('  (no activity yet — peer connects, block sync, and file events appear here)'),
+    ];
   }
-  const start = Math.max(0, events.length - maxRows);
-  return events.slice(start).map((e) => '  ' + fmtEvent(e));
+  const lines = buildActivityLines(events);
+  const start = Math.max(0, lines.length - maxRows);
+  return lines.slice(start).map((line) => '  ' + line);
 }
 
 function renderEventLog(events: readonly SyncEvent[], maxRows: number): string {

@@ -454,6 +454,22 @@ function fmtEvent(e: SyncEvent): string {
         '  ' + dim('via ') + dim(e.transportLabel)
       );
     }
+    case 'peer-connect-failed': {
+      const who =
+        e.remoteProfilePublicKey !== ''
+          ? '  ' + e.remoteProfilePublicKey.slice(0, 8)
+          : dim('       ');
+      const tries =
+        e.attempts > 1 ? dim(`  (${e.attempts} tries)`) : '';
+      return (
+        time +
+        '  ' + yellow('! connect failed ') +
+        dim(e.reason.padEnd(18)) +
+        who +
+        tries +
+        '  ' + dim('via ') + dim(e.transportLabel)
+      );
+    }
     case 'block-sent': {
       return (
         time +

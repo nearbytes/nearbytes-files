@@ -517,6 +517,11 @@ export interface StartReplOptions {
    * `monitor` verb manually.
    */
   readonly autoMonitor?: boolean;
+  /**
+   * When true, REPL command failures print full stack traces rather than
+   * only `err.message`. Useful while debugging parser/transport issues.
+   */
+  readonly debug?: boolean;
 }
 
 export async function startRepl(ctx: Context, opts: StartReplOptions = {}): Promise<void> {
@@ -543,6 +548,9 @@ export async function startRepl(ctx: Context, opts: StartReplOptions = {}): Prom
       dim(' — FTP/SFTP-style commands · Tab complete · ↑↓ history · ^R search · ^D / bye to exit'),
   );
   console.log(dim(`  History: ${historySession.lines.length} entries (saved on exit)`));
+  if (opts.debug === true) {
+    console.log(dim('  Debug mode: on (stack traces enabled)'));
+  }
   if (ctx.config.profiles.length === 0) {
     console.log('');
     console.log(yellow('  ! No profile configured — sync is offline.'));
@@ -591,7 +599,12 @@ export async function startRepl(ctx: Context, opts: StartReplOptions = {}): Prom
   if (opts.autoMonitor === true) {
     setImmediate(() => {
       void cmdMonitor(ctx, { rl }).catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg =
+          err instanceof Error
+            ? opts.debug === true && err.stack
+              ? err.stack
+              : err.message
+            : String(err);
         console.error(red(`✗ monitor auto-start failed: ${msg}`));
       });
     });
@@ -633,7 +646,12 @@ export async function startRepl(ctx: Context, opts: StartReplOptions = {}): Prom
           rl.close();
           return;
         }
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg =
+          err instanceof Error
+            ? opts.debug === true && err.stack
+              ? err.stack
+              : err.message
+            : String(err);
         console.error(red(`✗ ${msg}`));
         rl.prompt();
       }
@@ -657,7 +675,13 @@ export async function startRepl(ctx: Context, opts: StartReplOptions = {}): Prom
       process.once('SIGINT', onSigint);
       void flushAndStop(ctx, { abortSignal: abortController.signal })
         .catch((err) => {
-          console.error(red(`✗ shutdown error: ${err instanceof Error ? err.message : String(err)}`));
+          const msg =
+            err instanceof Error
+              ? opts.debug === true && err.stack
+                ? err.stack
+                : err.message
+              : String(err);
+          console.error(red(`✗ shutdown error: ${msg}`));
         })
         .finally(() => {
           process.removeListener('SIGINT', onSigint);

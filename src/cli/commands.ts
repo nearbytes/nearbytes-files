@@ -823,6 +823,12 @@ export function cmdHelp(): void {
   console.log(`
 ${bold('Nearbytes REPL')} ${dim('— FTP/SFTP-style commands. The "file" prefix is optional everywhere.')}
 
+${cyan('Startup / global CLI options')}
+  nbf ${dim('[-c <config>] [-d <dataDir>] [-m] [--debug] [repl]')}
+                                         ${dim('-m auto-mounts monitor on REPL start')}
+                                         ${dim('--debug prints stack traces on errors')}
+                                         ${dim('-d is global dataDir; in mget, -d means destination dir')}
+
 ${cyan('Remote filesystem (volume)')}
   ls ${dim('[path] [-s <secret>]')}                List entries under path ${dim('(default: cwd, alias: dir, list)')}
   cd ${dim('[path]')}                              Change remote working directory ${dim('(default: /)')}

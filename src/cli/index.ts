@@ -48,11 +48,24 @@ function die(msg: string): never {
   process.exit(1);
 }
 
+function isDebugEnabled(): boolean {
+  const opts = program.opts<{ debug?: boolean }>();
+  return opts.debug === true || process.env['NEARBYTES_DEBUG'] === '1';
+}
+
+function formatErrorForCli(err: unknown, debug: boolean): string {
+  if (err instanceof Error) {
+    if (debug && err.stack) return err.stack;
+    return err.message;
+  }
+  return String(err);
+}
+
 async function bail(fn: () => Promise<void>): Promise<void> {
   try {
     await fn();
   } catch (err) {
-    die(err instanceof Error ? err.message : String(err));
+    die(formatErrorForCli(err, isDebugEnabled()));
   }
 }
 
@@ -72,19 +85,32 @@ program
     '-m, --monitor',
     'Auto-activate the sticky live monitor when launching the REPL',
     false,
+  )
+  .option(
+    '--debug',
+    'Print stack traces and verbose diagnostics on command errors',
+    false,
   );
 
 /**
  * Boot the interactive REPL. Shared by the explicit `repl` subcommand and
  * the no-subcommand default action below so `nbf` and `nbf repl` behave
  * identically. Keeping a single launch function means custom-flag handling
- * (`-d`, `-c`, `-m`) can't drift between the two entry points.
+ * (`-d`, `-c`, `-m`, `--debug`) can't drift between the two entry points.
  */
 async function runRepl(): Promise<void> {
-  const opts = program.opts<{ config?: string; dataDir: string; monitor: boolean }>();
+  const opts = program.opts<{
+    config?: string;
+    dataDir: string;
+    monitor: boolean;
+    debug: boolean;
+  }>();
   const config = await readConfig(opts.config).catch(() => emptyConfig(opts.dataDir));
   const ctx = await createContext({ ...config, dataDir: opts.dataDir ?? config.dataDir });
-  await startRepl(ctx, { autoMonitor: opts.monitor === true });
+  await startRepl(ctx, {
+    autoMonitor: opts.monitor === true,
+    debug: opts.debug === true || process.env['NEARBYTES_DEBUG'] === '1',
+  });
 }
 
 // ── repl ──────────────────────────────────────────────────────────────────

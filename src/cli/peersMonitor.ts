@@ -91,25 +91,80 @@ function isLocalAddress(addr: string): boolean {
 }
 
 /**
- * Pull the bare IP out of a transport label like
+ * Parse `host:port` (or bracketed IPv6) out of discovery transport labels:
  *
+ *   dht:192.168.1.5:42393
+ *   dht:[fe80::1]:53432
  *   mdns-tcp:192.168.1.5:53432->041703b9
  *   tcp:127.0.0.1:51999
- *   mdns-tcp:fe80::1:53432
  *
- * Node's `socket.remoteAddress` is the un-bracketed form even for
- * IPv6, so the port is the last colon-separated segment. We strip an
- * optional `->profile` suffix first, then split on the last `:`.
- * Returns `null` if the label does not carry the expected prefix.
+ * Legacy `hyperswarm:<pubkey>` labels carry no endpoint → `null`.
  */
-function extractIpFromLabel(label: string, prefix: string): string | null {
-  if (!label.startsWith(prefix)) return null;
-  const rest = label.slice(prefix.length);
+function parseHostPortFromLabel(label: string): { host: string; port: number } | null {
+  if (label.startsWith('hyperswarm:') || label.startsWith('mdns:')) {
+    return null;
+  }
+  const prefixes = ['dht:', 'mdns-tcp:', 'tcp:'] as const;
+  let rest: string | null = null;
+  for (const prefix of prefixes) {
+    if (label.startsWith(prefix)) {
+      rest = label.slice(prefix.length);
+      break;
+    }
+  }
+  if (rest === null) {
+    return null;
+  }
   const arrow = rest.indexOf('->');
   const hostPort = arrow >= 0 ? rest.slice(0, arrow) : rest;
+  if (hostPort === 'unknown') {
+    return { host: 'unknown', port: 0 };
+  }
+  if (hostPort.startsWith('[')) {
+    const close = hostPort.indexOf(']');
+    if (close > 0) {
+      const host = hostPort.slice(1, close).toLowerCase();
+      const portPart = hostPort.slice(close + 1);
+      const port = portPart.startsWith(':') ? parseInt(portPart.slice(1), 10) : 0;
+      return { host, port: Number.isNaN(port) ? 0 : port };
+    }
+  }
   const lastColon = hostPort.lastIndexOf(':');
-  if (lastColon < 0) return hostPort.toLowerCase();
-  return hostPort.slice(0, lastColon).toLowerCase();
+  if (lastColon < 0) {
+    return { host: hostPort.toLowerCase(), port: 0 };
+  }
+  const host = hostPort.slice(0, lastColon).toLowerCase();
+  const port = parseInt(hostPort.slice(lastColon + 1), 10);
+  return { host, port: Number.isNaN(port) ? 0 : port };
+}
+
+function extractIpFromLabel(label: string, prefix: string): string | null {
+  if (!label.startsWith(prefix)) {
+    return null;
+  }
+  return parseHostPortFromLabel(label)?.host ?? null;
+}
+
+/**
+ * Compact endpoint for monitor / peer table (no `via hyperswarm:…` noise).
+ * Route (LAN / DHT / local) stays in its own column.
+ */
+function formatTransportEndpoint(label: string): string {
+  const hp = parseHostPortFromLabel(label);
+  if (hp !== null) {
+    if (hp.host === 'unknown') {
+      return 'DHT';
+    }
+    const hostShown = hp.host.includes(':') ? `[${hp.host}]` : hp.host;
+    return hp.port > 0 ? `${hostShown}:${hp.port}` : hostShown;
+  }
+  if (label.startsWith('hyperswarm:')) {
+    return `DHT ${label.slice('hyperswarm:'.length, 'hyperswarm:'.length + 8)}`;
+  }
+  if (label.startsWith('mdns:')) {
+    return 'mDNS';
+  }
+  return label.length > 28 ? `${label.slice(0, 28)}…` : label;
 }
 
 /**
@@ -141,7 +196,9 @@ function classifyTransport(label: string): { route: string; tint: (s: string) =>
       : { route: 'LAN', tint: green };
   }
   if (label.startsWith('mdns:')) return { route: 'LAN', tint: green };
-  if (label.startsWith('hyperswarm:')) return { route: 'DHT', tint: cyan };
+  if (label.startsWith('dht:') || label.startsWith('hyperswarm:')) {
+    return { route: 'DHT', tint: cyan };
+  }
   const tcpIp = extractIpFromLabel(label, 'tcp:');
   if (tcpIp !== null) {
     return isLocalAddress(tcpIp)
@@ -162,7 +219,9 @@ function classifyTransport(label: string): { route: string; tint: (s: string) =>
  * a low ping is a heuristic.
  */
 export function isPeerLocal(peer: ConnectedPeer): boolean {
+  const parsed = parseHostPortFromLabel(peer.transportLabel);
   const ip =
+    (parsed !== null && parsed.host !== 'unknown' ? parsed.host : null) ??
     extractIpFromLabel(peer.transportLabel, 'mdns-tcp:') ??
     extractIpFromLabel(peer.transportLabel, 'tcp:');
   if (ip === null) return false;
@@ -220,7 +279,7 @@ function renderPeerTableLines(rows: readonly PeerRow[], wide = false): string[] 
     bold('PeerId'.padEnd(COL_PEERID)) +
     bold('Route'.padEnd(COL_ROUTE)) +
     bold('Age'.padEnd(COL_AGE)) +
-    bold('Transport');
+    bold('Endpoint');
   const sep = dim('─'.repeat(COL_NUM + COL_ROLE + COL_PROFILE + COL_PEERID + COL_ROUTE + COL_AGE + 24));
   /**
    * Pad-first-then-tint: ANSI escape codes are invisible to `String.padEnd`
@@ -239,7 +298,7 @@ function renderPeerTableLines(rows: readonly PeerRow[], wide = false): string[] 
       r.peerId.padEnd(COL_PEERID) +
       padThenTint(r.route, COL_ROUTE, r.routeTint) +
       r.age.padEnd(COL_AGE) +
-      dim(r.label)
+      dim(formatTransportEndpoint(r.label))
     );
   });
   return [header, sep, ...body];
@@ -442,7 +501,7 @@ function fmtEvent(e: SyncEvent): string {
         '  ' + green('+ peer connect   ') +
         roleStr +
         '  ' + e.remoteProfilePublicKey.slice(0, 8) +
-        '  ' + dim('via ') + dim(e.transportLabel)
+        '  ' + dim('@ ') + cyan(formatTransportEndpoint(e.transportLabel))
       );
     }
     case 'peer-disconnected': {
@@ -451,7 +510,7 @@ function fmtEvent(e: SyncEvent): string {
         '  ' + red('− peer disconn.  ') +
         dim('       ') +
         '  ' + e.remoteProfilePublicKey.slice(0, 8) +
-        '  ' + dim('via ') + dim(e.transportLabel)
+        '  ' + dim('@ ') + dim(formatTransportEndpoint(e.transportLabel))
       );
     }
     case 'peer-connect-failed': {
@@ -467,7 +526,7 @@ function fmtEvent(e: SyncEvent): string {
         dim(e.reason.padEnd(18)) +
         who +
         tries +
-        '  ' + dim('via ') + dim(e.transportLabel)
+        '  ' + dim('@ ') + yellow(formatTransportEndpoint(e.transportLabel))
       );
     }
     case 'block-sent': {

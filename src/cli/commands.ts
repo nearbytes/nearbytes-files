@@ -615,7 +615,7 @@ export async function cmdClose(ctx: Context): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export interface FlushOptions {
-  /** Maximum wall time to wait for sync to go quiet (default 10 s). */
+  /** Maximum wall time to wait for sync to go quiet (auto-tuned by default). */
   readonly maxMs?: number;
   /** Cancellation: set by ^C to abort the wait early and exit immediately. */
   readonly abortSignal?: AbortSignal;
@@ -656,13 +656,15 @@ export async function flushAndStop(ctx: Context, opts: FlushOptions = {}): Promi
    * connected, nothing to send) and exits before the swarm even bootstraps.
    * We saw exactly this failure mode in the previous test run.
    *
-   * The total budget is `maxMs` (default 15s). On WAN, Hyperswarm typically
-   * finds the first peer within 5–15s; on LAN, mDNS is sub-second. For
-   * pathological networks where no peer is reachable, the budget fires and
-   * we emit a "no peer found" warning — the local writes are durable and
-   * will be picked up by any future sync.
+   * The total budget is `maxMs` (default is auto-tuned):
+   *   - friends configured: 60s (WAN-friendly)
+   *   - no friends:         15s (local/single-node ergonomics)
+   * On WAN, first peer discovery can exceed 15s under jitter/NAT churn;
+   * giving a longer default avoids false "looks synced but actually exited
+   * before first data transfer" outcomes in one-shot commands.
    */
-  const maxMs = opts.maxMs ?? 15000;
+  const defaultMaxMs = ctx.config.friends.length > 0 ? 60000 : 15000;
+  const maxMs = opts.maxMs ?? defaultMaxMs;
   const QUIET_MS = 1000;
   const POLL_MS = 256;
   const started = Date.now();

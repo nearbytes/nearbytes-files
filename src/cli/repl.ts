@@ -70,7 +70,7 @@ import {
   cmdClose,
   flushAndStop,
 } from './commands.js';
-import { cmdPeers, cmdMonitor } from './peersMonitor.js';
+import { cmdPeers, cmdMonitor, cmdWhoami } from './peersMonitor.js';
 import type { Context } from './context.js';
 import { createReplCompleter } from './replCompleter.js';
 import {
@@ -444,8 +444,14 @@ async function dispatch(ctx: Context, tokens: string[], rl: readline.Interface):
     }
 
     // ---- diagnostics ----
-    case 'peers':
-      await cmdPeers(ctx);
+    case 'peers': {
+      const wide = rest.some((a) => a === '-w' || a === '--wide');
+      await cmdPeers(ctx, { wide });
+      return;
+    }
+
+    case 'whoami':
+      await cmdWhoami(ctx);
       return;
 
     case 'monitor':

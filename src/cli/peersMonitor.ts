@@ -184,12 +184,12 @@ interface PeerRow {
   readonly age: string;
 }
 
-function toRow(peer: ConnectedPeer, now: number): PeerRow {
+function toRow(peer: ConnectedPeer, now: number, wide = false): PeerRow {
   const { route, tint } = classifyTransport(peer.transportLabel);
   return {
     role: peer.role,
-    profile: shortHex(peer.remoteProfilePublicKey),
-    peerId: shortHex(peer.remotePeerId),
+    profile: wide ? peer.remoteProfilePublicKey : shortHex(peer.remoteProfilePublicKey),
+    peerId: wide ? peer.remotePeerId : shortHex(peer.remotePeerId),
     route,
     routeTint: tint,
     label: peer.transportLabel,
@@ -203,14 +203,14 @@ function toRow(peer: ConnectedPeer, now: number): PeerRow {
  * written at an absolute cursor position; the legacy one-shot
  * `renderPeerTable` wrapper joins these lines back with `\n`.
  */
-function renderPeerTableLines(rows: readonly PeerRow[]): string[] {
+function renderPeerTableLines(rows: readonly PeerRow[], wide = false): string[] {
   if (rows.length === 0) {
     return [yellow('  (no peers connected)')];
   }
   const COL_NUM = 3;
   const COL_ROLE = 8;
-  const COL_PROFILE = 10;
-  const COL_PEERID = 10;
+  const COL_PROFILE = wide ? 66 : 10;
+  const COL_PEERID = wide ? 34 : 10;
   const COL_ROUTE = 10;
   const COL_AGE = 6;
   const header =
@@ -245,8 +245,53 @@ function renderPeerTableLines(rows: readonly PeerRow[]): string[] {
   return [header, sep, ...body];
 }
 
-function renderPeerTable(rows: readonly PeerRow[]): string {
-  return renderPeerTableLines(rows).join('\n');
+function renderPeerTable(rows: readonly PeerRow[], wide = false): string {
+  return renderPeerTableLines(rows, wide).join('\n');
+}
+
+/**
+ * Print this node's DISC-26 identity and sync configuration. Use to
+ * answer "what is my peerId?" and to match against the PeerId column
+ * when a remote machine connects (e.g. pc-ciancia → `e44ff9aa…`).
+ */
+export async function cmdWhoami(ctx: Context): Promise<void> {
+  const state = await readMonitorState(ctx);
+  const sync = ctx.skeleton.sync;
+  const profileName = ctx.config.activeProfile;
+
+  console.log('');
+  console.log(bold('Node identity') + '   ' + describeMode(state));
+  console.log(dim('─'.repeat(60)));
+  console.log(`  ${bold('dataDir:')}      ${ctx.config.dataDir}`);
+  console.log(
+    `  ${bold('peerId:')}       ${state.localPeerId !== '' ? cyan(state.localPeerId) : dim('(none — no profile or unreadable .nearbytes-node-id)')}`,
+  );
+  console.log(
+    `  ${bold('profile:')}      ${profileName !== null ? green(profileName) : dim('(none)')}`,
+  );
+  console.log(
+    `  ${bold('profilePk:')}    ${state.localActiveProfile !== '' ? state.localActiveProfile : dim('(none)')}`,
+  );
+  console.log(`  ${bold('served:')}       ${sync.serveProfilePublicKeys.length} profile(s)`);
+  console.log(`  ${bold('friends:')}      ${sync.friends.length}`);
+  if (state.mode !== 'local') {
+    console.log('');
+    console.log(
+      dim(
+        '  Network view (peers, events, throughput) comes from the daemon beacon — ' +
+          'run `peers` or `monitor` to inspect remote peerIds.',
+      ),
+    );
+  } else {
+    console.log('');
+    console.log(
+      dim(
+        '  When a remote peer connects, its PeerId column identifies that machine. ' +
+          'Match the first 8 hex chars against known node ids (e.g. pc-ciancia).',
+      ),
+    );
+  }
+  console.log('');
 }
 
 /**
@@ -466,6 +511,14 @@ interface MonitorState {
   readonly snapshot: SyncSnapshot;
   readonly peers: readonly ConnectedPeer[];
   /**
+   * This node's DISC-26 identity and active profile, as seen by the
+   * process that owns the sync engine (LIVE) or published by the daemon
+   * beacon (DAEMON). In writer-only / beacon-missing modes we fall
+   * back to the on-disk node id + configured profile intent.
+   */
+  readonly localPeerId: string;
+  readonly localActiveProfile: string;
+  /**
    * Most-recent wire events from whichever source we read.
    * `local` mode → this process's own `SyncEventBuffer`.
    * beacon modes → `payload.events` from the daemon's beacon (may be
@@ -512,6 +565,8 @@ async function readMonitorState(ctx: Context): Promise<MonitorState> {
       peers: sync.peers(),
       events: sync.recentEvents(),
       stats: sync.stats(),
+      localPeerId: sync.peerId,
+      localActiveProfile: sync.activeProfilePublicKey,
       mode: 'local',
     };
   }
@@ -522,6 +577,8 @@ async function readMonitorState(ctx: Context): Promise<MonitorState> {
       peers: [],
       events: [],
       stats: ZERO_STATS,
+      localPeerId: sync.peerId,
+      localActiveProfile: sync.activeProfilePublicKey,
       mode: 'beacon-missing',
       beaconPid: daemon.holderPid,
     };
@@ -549,10 +606,35 @@ async function readMonitorState(ctx: Context): Promise<MonitorState> {
      * policy — surface zeroed counters instead of refusing to render.
      */
     stats: beacon.payload.stats ?? ZERO_STATS,
+    localPeerId: beacon.payload.peerId ?? sync.peerId,
+    localActiveProfile: beacon.payload.activeProfilePublicKey ?? sync.activeProfilePublicKey,
     mode,
     beaconAgeMs: beacon.ageMs,
     beaconPid: beacon.payload.pid,
   };
+}
+
+/**
+ * One-line summary of *this* node's wire identity so the operator can
+ * map peer-table rows (remote peerId) to known machines without
+ * `cat .nearbytes-node-id`.
+ */
+function renderLocalIdentityLine(state: MonitorState, compact = false): string {
+  if (state.localPeerId === '' && state.localActiveProfile === '') {
+    return dim('  me (no profile — use `profile add` first)');
+  }
+  const parts: string[] = [];
+  if (state.localPeerId !== '') {
+    const peerShown = compact ? state.localPeerId.slice(0, 8) : state.localPeerId;
+    parts.push(bold('peer=') + cyan(peerShown));
+  }
+  if (state.localActiveProfile !== '') {
+    const pkShown = compact
+      ? state.localActiveProfile.slice(0, 8) + '…'
+      : state.localActiveProfile;
+    parts.push(bold('profile=') + yellow(pkShown));
+  }
+  return dim('  me ') + parts.join(dim(' · '));
 }
 
 function describeMode(state: MonitorState): string {
@@ -594,20 +676,27 @@ function describeMode(state: MonitorState): string {
  * by both the REPL `peers` verb and the standalone `nbf peers` subcommand.
  * In writer-only mode reads from the daemon's beacon — never just refuses.
  */
-export async function cmdPeers(ctx: Context): Promise<void> {
+export interface PeersCommandOptions {
+  /** Show full 32-hex peer ids (and profile keys) in the peer table. */
+  readonly wide?: boolean;
+}
+
+export async function cmdPeers(ctx: Context, opts: PeersCommandOptions = {}): Promise<void> {
+  const wide = opts.wide === true;
   const state = await readMonitorState(ctx);
   const now = Date.now();
 
   console.log('');
   console.log(bold('Sync state') + '   ' + describeMode(state));
   console.log(dim('─'.repeat(60)));
+  console.log(renderLocalIdentityLine(state));
   console.log('  ' + renderSummary(state.snapshot, state.peers));
   console.log(renderThroughputRow(state.stats));
   console.log('');
   console.log(bold('Connected peers'));
   console.log(dim('─'.repeat(60)));
-  const rows = state.peers.map((p) => toRow(p, now));
-  console.log(renderPeerTable(rows));
+  const rows = state.peers.map((p) => toRow(p, now, wide));
+  console.log(renderPeerTable(rows, wide));
   console.log('');
   // Recent activity: a one-shot tail. In writer-only mode this is the
   // daemon's `events` from the beacon, which means `nbf peers` against
@@ -645,7 +734,7 @@ function renderStickyPaneLines(
   cols: number,
 ): string[] {
   const now = Date.now();
-  const rows = state.peers.map((p) => toRow(p, now));
+  const rows = state.peers.map((p) => toRow(p, now, false));
 
   const title =
     bold(' Nearbytes monitor ') +
@@ -660,6 +749,7 @@ function renderStickyPaneLines(
 
   const lines: string[] = [];
   lines.push(title + trail);
+  lines.push(renderLocalIdentityLine(state, true));
   lines.push(renderThroughputRow(state.stats));
 
   // Peer table (cap so the events region keeps at least 3 rows).
@@ -668,7 +758,7 @@ function renderStickyPaneLines(
   const MIN_EVENT_ROWS = 3;
   const peerBudget = Math.max(
     0,
-    height - 2 /* title + throughput */ - PEER_TABLE_OVERHEAD - ACTIVITY_OVERHEAD - MIN_EVENT_ROWS,
+    height - 3 /* title + identity + throughput */ - PEER_TABLE_OVERHEAD - ACTIVITY_OVERHEAD - MIN_EVENT_ROWS,
   );
   const cappedRows = rows.slice(0, Math.max(1, peerBudget));
   const peerLines = renderPeerTableLines(cappedRows);
@@ -699,7 +789,7 @@ function renderStickyPaneLines(
  */
 function computePaneHeight(termRows: number): number {
   const ideal = Math.floor(termRows * 0.4);
-  return Math.max(13, Math.min(22, ideal));
+  return Math.max(14, Math.min(22, ideal));
 }
 
 interface StickyMonitorHandle {

@@ -65,6 +65,7 @@ const TOP_LEVEL = [
   'volume',
   // Diagnostics
   'peers',
+  'whoami',
   'monitor',
   'top',
   // Session

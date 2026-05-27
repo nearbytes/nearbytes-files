@@ -36,7 +36,7 @@ import {
   cmdProfileRemove,
   red,
 } from './commands.js';
-import { cmdPeers, cmdMonitor } from './peersMonitor.js';
+import { cmdPeers, cmdMonitor, cmdWhoami } from './peersMonitor.js';
 import { startRepl } from './repl.js';
 
 // ---------------------------------------------------------------------------
@@ -168,12 +168,26 @@ program
 program
   .command('peers')
   .description('Snapshot of currently-connected peers (role, route, age, transport)')
+  .option('-w, --wide', 'Show full 32-hex peer ids in the peer table')
+  .action(async (opts: { wide?: boolean }) => {
+    const gopts = program.opts<{ config?: string; dataDir: string }>();
+    const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
+    const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
+    await bail(async () => {
+      await cmdPeers(ctx, { wide: opts.wide === true });
+      await ctx.destroy();
+    });
+  });
+
+program
+  .command('whoami')
+  .description('Show this node\'s peerId, active profile, and sync configuration')
   .action(async () => {
     const gopts = program.opts<{ config?: string; dataDir: string }>();
     const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
     const ctx = await createContext({ ...config, dataDir: gopts.dataDir ?? config.dataDir });
     await bail(async () => {
-      await cmdPeers(ctx);
+      await cmdWhoami(ctx);
       await ctx.destroy();
     });
   });

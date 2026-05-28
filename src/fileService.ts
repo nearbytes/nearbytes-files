@@ -7,7 +7,6 @@ import { DecryptionError } from 'nearbytes-crypto';
 import { type Log } from 'nearbytes-log';
 import { serializeEvent, serializeEventEnvelope, serializeInnerEventPayloadJson } from 'nearbytes-log';
 import type { EventLogEntry } from 'nearbytes-log';
-import { createSignedEvent } from 'nearbytes-log';
 import { openChannel, loadEventLog, verifyEventLog } from 'nearbytes-log';
 import type { DirectoryMetadata, FileMetadata } from './fileEvents.js';
 import {
@@ -41,10 +40,16 @@ import {
 import { dedupeOrderedFilenames, resolveImportedFilename } from './fileCommands.js';
 import {
   materialize,
-  type CanonicalEntry,
-  type CanonicalEvent,
   type MaterializedShadow,
 } from './fileMaterializer.js';
+import { toCanonicalEntries } from './fileLogEntries.js';
+import {
+  emitFileEvent,
+  type CausalLineage,
+  lineagesForRename,
+  lineageAtPath,
+  loadMaterializedFileSystem,
+} from './fileEmit.js';
 import { normalizeVolumePath } from './pathUtils.js';
 
 export interface SnapshotSummary {
@@ -345,6 +350,7 @@ async function addFileWithDeps(
   const blobHash = await channelStorage.blocks.store(encrypted.encryptedData, true);
 
   const createdAt = now();
+  const fs = await loadMaterializedFileSystem(normalizedSecret, crypto, channelStorage);
   await appendCreateEvent(channelStorage, crypto, keyPair, {
     path,
     blobHash,
@@ -352,6 +358,7 @@ async function addFileWithDeps(
     contentType: encrypted.contentType,
     mimeType: opts?.mimeType,
     createdAt,
+    lineages: [lineageAtPath(fs, path)],
   });
 
   return {
@@ -398,7 +405,10 @@ async function mkdirWithDeps(
   const normalizedSecret = normalizeSecret(secret);
   const keyPair = await crypto.deriveKeys(normalizedSecret);
   const createdAt = now();
-  await appendMkdirEvent(channelStorage, crypto, keyPair, path, createdAt);
+  const fs = await loadMaterializedFileSystem(normalizedSecret, crypto, channelStorage);
+  await appendMkdirEvent(channelStorage, crypto, keyPair, path, createdAt, [
+    lineageAtPath(fs, path),
+  ]);
   return { path, createdAt, explicit: true };
 }
 
@@ -412,7 +422,8 @@ async function deletePathWithDeps(
   const path = normalizeVolumePath(rawPath);
   const normalizedSecret = normalizeSecret(secret);
   const keyPair = await crypto.deriveKeys(normalizedSecret);
-  await appendDeleteEvent(channelStorage, crypto, keyPair, path, now());
+  const fs = await loadMaterializedFileSystem(normalizedSecret, crypto, channelStorage);
+  await appendDeleteEvent(channelStorage, crypto, keyPair, path, now(), [lineageAtPath(fs, path)]);
 }
 
 async function renameWithDeps(
@@ -438,8 +449,16 @@ async function renameWithDeps(
   const maxTimestamp = timeline.reduce((max, event) => Math.max(max, event.timestamp), 0);
   const renamedAt = Math.max(now(), maxTimestamp + 1);
   const keyPair = await crypto.deriveKeys(normalizedSecret);
-
-  await appendRenameEvent(channelStorage, crypto, keyPair, fromPath, toPath, renamedAt);
+  const fs = materialize(toCanonicalEntries(entries));
+  await appendRenameEvent(
+    channelStorage,
+    crypto,
+    keyPair,
+    fromPath,
+    toPath,
+    renamedAt,
+    lineagesForRename(fs, fromPath, toPath),
+  );
 
   return { fromPath, toPath };
 }
@@ -632,19 +651,20 @@ async function exportSourceReferencesWithDeps(
 
   const volume = await openChannel(normalizedSecret, crypto);
   const keyPair = await crypto.deriveKeys(normalizedSecret);
-  let { files } = await loadVolumeFiles(crypto, channelStorage, volume);
+  let { entries, files } = await loadVolumeFiles(crypto, channelStorage, volume);
   let upgradedCount = 0;
 
   upgradedCount += await upgradeLegacyFilesForExport(
     orderedPaths,
     files,
+    entries,
     keyPair,
     crypto,
     channelStorage,
     now,
   );
   if (upgradedCount > 0) {
-    ({ files } = await loadVolumeFiles(crypto, channelStorage, volume));
+    ({ files, entries } = await loadVolumeFiles(crypto, channelStorage, volume));
   }
 
   const fileMap = new Map(files.map((file) => [file.path, file]));
@@ -724,19 +744,20 @@ async function exportRecipientReferencesWithDeps(
 
   const volume = await openChannel(normalizedSecret, crypto);
   const keyPair = await crypto.deriveKeys(normalizedSecret);
-  let { files } = await loadVolumeFiles(crypto, channelStorage, volume);
+  let { entries, files } = await loadVolumeFiles(crypto, channelStorage, volume);
   let upgradedCount = 0;
 
   upgradedCount += await upgradeLegacyFilesForExport(
     orderedPaths,
     files,
+    entries,
     keyPair,
     crypto,
     channelStorage,
     now,
   );
   if (upgradedCount > 0) {
-    ({ files } = await loadVolumeFiles(crypto, channelStorage, volume));
+    ({ files, entries } = await loadVolumeFiles(crypto, channelStorage, volume));
   }
 
   const fileMap = new Map(files.map((file) => [file.path, file]));
@@ -815,6 +836,7 @@ async function importRecipientReferencesWithDeps(
     const encryptedKey = await wrapFileKeyForVolume(crypto, destinationKeyPair.privateKey, fileKey);
     const createdAt = resolveImportedCreatedAt(item.createdAt, nextTimestamp);
 
+    const fs = materialize(toCanonicalEntries(entries));
     await appendCreateEvent(channelStorage, crypto, destinationKeyPair, {
       path: finalName,
       blobHash: descriptor.h,
@@ -822,6 +844,7 @@ async function importRecipientReferencesWithDeps(
       contentType: descriptor.t,
       mimeType: item.mime,
       createdAt,
+      lineages: [lineageAtPath(fs, finalName)],
     });
 
     imported.push({
@@ -841,70 +864,6 @@ async function importRecipientReferencesWithDeps(
 // ---------------------------------------------------------------------------
 // Materialization helpers
 // ---------------------------------------------------------------------------
-
-function toCanonicalEntries(entries: EventLogEntry[]): CanonicalEntry[] {
-  return entries
-    .map((entry, sequence) => ({
-      timestamp: extractTimestamp(entry, sequence),
-      sequence,
-      tiebreak: entry.eventHash,
-      entry,
-    }))
-    .sort((left, right) => {
-      if (left.timestamp !== right.timestamp) return left.timestamp - right.timestamp;
-      if (left.sequence !== right.sequence) return left.sequence - right.sequence;
-      return left.tiebreak < right.tiebreak ? -1 : left.tiebreak > right.tiebreak ? 1 : 0;
-    })
-    .map(({ entry, tiebreak }) => ({ tiebreak, event: toCanonicalEvent(entry) }));
-}
-
-function toCanonicalEvent(entry: EventLogEntry): CanonicalEvent {
-  const payload = entry.signedEvent.payload;
-  if (payload.type === EventType.CREATE_FILE) {
-    const blobHash =
-      payload.content.protocol === 'nb.content.single.v1'
-        ? payload.content.blockHash
-        : payload.content.manifestHash;
-    const contentType: 'b' | 'm' =
-      payload.content.protocol === 'nb.content.manifest.v1' ? 'm' : 'b';
-    return {
-      kind: 'CREATE_FILE',
-      path: payload.path,
-      blobHash,
-      contentType,
-      size: 0,
-      mimeType: payload.mimeType,
-      createdAt: payload.createdAt,
-    };
-  }
-  if (payload.type === EventType.MKDIR) {
-    return { kind: 'MKDIR', path: payload.path, createdAt: payload.createdAt };
-  }
-  if (payload.type === EventType.DELETE) {
-    return { kind: 'DELETE', path: payload.path, deletedAt: payload.deletedAt };
-  }
-  if (payload.type === EventType.RENAME) {
-    return {
-      kind: 'RENAME',
-      fromPath: payload.fromPath,
-      toPath: payload.toPath,
-      renamedAt: payload.renamedAt,
-    };
-  }
-  return { kind: 'OTHER', verb: String(payload.type), timestamp: extractTimestamp(entry, 0) };
-}
-
-function extractTimestamp(entry: EventLogEntry, fallback: number): number {
-  const payload = entry.signedEvent.payload;
-  if (payload.type === EventType.CREATE_FILE) return payload.createdAt;
-  if (payload.type === EventType.MKDIR) return payload.createdAt;
-  if (payload.type === EventType.DELETE) return payload.deletedAt;
-  if (payload.type === EventType.RENAME) return payload.renamedAt;
-  if (payload.type === EventType.DECLARE_IDENTITY) return payload.publishedAt ?? fallback;
-  if (payload.type === EventType.CHAT_MESSAGE) return payload.publishedAt ?? fallback;
-  if (payload.type === EventType.APP_RECORD) return payload.publishedAt;
-  return fallback;
-}
 
 function materializeFilesFromEntries(entries: EventLogEntry[]): FileMetadata[] {
   const files = materializeStoredFilesFromEntries(entries).map<FileMetadata>((file) => ({
@@ -1229,6 +1188,7 @@ async function loadVolumeFiles(
 async function upgradeLegacyFilesForExport(
   paths: readonly string[],
   files: readonly StoredFileRecord[],
+  entries: EventLogEntry[],
   keyPair: KeyPair,
   crypto: CryptoOperations,
   channelStorage: Log,
@@ -1251,6 +1211,7 @@ async function upgradeLegacyFilesForExport(
     );
     const encrypted = await encryptFileForVolume(crypto, keyPair.privateKey, plaintext);
     const blobHash = await channelStorage.blocks.store(encrypted.encryptedData, true);
+    const fs = materialize(toCanonicalEntries(entries));
     await appendCreateEvent(channelStorage, crypto, keyPair, {
       path: file.path,
       blobHash,
@@ -1258,6 +1219,7 @@ async function upgradeLegacyFilesForExport(
       contentType: encrypted.contentType,
       mimeType: file.mimeType,
       createdAt: timestamp,
+      lineages: [lineageAtPath(fs, file.path)],
     });
 
     upgradedCount += 1;
@@ -1294,6 +1256,7 @@ async function importSourceBundleItems(
     const encryptedKey = await wrapFileKeyForVolume(crypto, destinationKeyPair.privateKey, fileKey);
     const createdAt = resolveImportedCreatedAt(item.createdAt, nextTimestamp);
 
+    const fs = materialize(toCanonicalEntries([...entries]));
     await appendCreateEvent(channelStorage, crypto, destinationKeyPair, {
       path: finalName,
       blobHash: item.ref.c.h,
@@ -1301,6 +1264,7 @@ async function importSourceBundleItems(
       contentType: item.ref.c.t,
       mimeType: item.mime,
       createdAt,
+      lineages: [lineageAtPath(fs, finalName)],
     });
 
     imported.push({
@@ -1412,6 +1376,7 @@ async function appendCreateEvent(
     contentType: FileContentType;
     mimeType?: string;
     createdAt: number;
+    lineages: readonly CausalLineage[];
   },
 ): Promise<void> {
   const contentDescriptor =
@@ -1426,8 +1391,9 @@ async function appendCreateEvent(
     createdAt: input.createdAt,
     mimeType: input.mimeType,
   };
-  const event = await createSignedEvent(crypto, keyPair, payload, [input.blobHash as Hash]);
-  await channelStorage.events.storeEvent(keyPair.publicKey, event);
+  await emitFileEvent(crypto, keyPair, channelStorage, payload, input.lineages, [
+    input.blobHash as Hash,
+  ]);
 }
 
 async function appendMkdirEvent(
@@ -1436,10 +1402,10 @@ async function appendMkdirEvent(
   keyPair: KeyPair,
   path: string,
   createdAt: number,
+  lineages: readonly CausalLineage[],
 ): Promise<void> {
   const payload: EventPayload = { type: EventType.MKDIR, path, createdAt };
-  const event = await createSignedEvent(crypto, keyPair, payload, []);
-  await channelStorage.events.storeEvent(keyPair.publicKey, event);
+  await emitFileEvent(crypto, keyPair, channelStorage, payload, lineages, []);
 }
 
 async function appendDeleteEvent(
@@ -1448,10 +1414,10 @@ async function appendDeleteEvent(
   keyPair: KeyPair,
   path: string,
   deletedAt: number,
+  lineages: readonly CausalLineage[],
 ): Promise<void> {
   const payload: EventPayload = { type: EventType.DELETE, path, deletedAt };
-  const event = await createSignedEvent(crypto, keyPair, payload, []);
-  await channelStorage.events.storeEvent(keyPair.publicKey, event);
+  await emitFileEvent(crypto, keyPair, channelStorage, payload, lineages, []);
 }
 
 async function appendRenameEvent(
@@ -1461,10 +1427,10 @@ async function appendRenameEvent(
   fromPath: string,
   toPath: string,
   renamedAt: number,
+  lineages: readonly CausalLineage[],
 ): Promise<void> {
   const payload: EventPayload = { type: EventType.RENAME, fromPath, toPath, renamedAt };
-  const event = await createSignedEvent(crypto, keyPair, payload, []);
-  await channelStorage.events.storeEvent(keyPair.publicKey, event);
+  await emitFileEvent(crypto, keyPair, channelStorage, payload, lineages, []);
 }
 
 function normalizeSecret(secret: string): Secret {

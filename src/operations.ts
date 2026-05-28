@@ -7,7 +7,8 @@ import { createEncryptedData } from 'nearbytes-crypto';
 import { createSymmetricKey } from 'nearbytes-crypto';
 import { computeHash } from 'nearbytes-crypto';
 import { serializeEventEnvelope } from 'nearbytes-log';
-import { createSignedEvent, hydrateSignedEvent } from 'nearbytes-log';
+import { hydrateSignedEvent } from 'nearbytes-log';
+import { emitFileEvent, lineageAtPath, loadMaterializedFileSystem } from './fileEmit.js';
 
 /**
  * Sets up a new channel from a secret
@@ -73,8 +74,15 @@ export async function storeData(
     createdAt: Date.now(),
   };
 
-  const signedEvent = await createSignedEvent(crypto, keyPair, payload, [dataHash]);
-  const eventHash = await channelStorage.events.storeEvent(keyPair.publicKey, signedEvent);
+  const fs = await loadMaterializedFileSystem(secret as string, crypto, channelStorage);
+  const eventHash = await emitFileEvent(
+    crypto,
+    keyPair,
+    channelStorage,
+    payload,
+    [lineageAtPath(fs, fileName)],
+    [dataHash],
+  );
 
   return { eventHash, dataHash };
 }
@@ -181,8 +189,15 @@ export async function storeDataDeduplicated(
     createdAt: Date.now(),
   };
 
-  const signedEvent = await createSignedEvent(crypto, keyPair, payload, [dataHash]);
-  const eventHash = await channelStorage.events.storeEvent(keyPair.publicKey, signedEvent);
+  const fs = await loadMaterializedFileSystem(secret as string, crypto, channelStorage);
+  const eventHash = await emitFileEvent(
+    crypto,
+    keyPair,
+    channelStorage,
+    payload,
+    [lineageAtPath(fs, fileName)],
+    [dataHash],
+  );
 
   return { eventHash, dataHash, wasDeduplicated: dataExists };
 }
@@ -200,15 +215,21 @@ export async function deletePath(
 ): Promise<{ eventHash: Hash }> {
   const keyPair = await crypto.deriveKeys(secret);
 
-  // file-events-v0.4: DELETE carries no block refs.
   const payload: EventPayload = {
     type: EventType.DELETE,
     path,
     deletedAt: Date.now(),
   };
 
-  const signedEvent = await createSignedEvent(crypto, keyPair, payload, []);
-  const eventHash = await channelStorage.events.storeEvent(keyPair.publicKey, signedEvent);
+  const fs = await loadMaterializedFileSystem(secret as string, crypto, channelStorage);
+  const eventHash = await emitFileEvent(
+    crypto,
+    keyPair,
+    channelStorage,
+    payload,
+    [lineageAtPath(fs, path)],
+    [],
+  );
 
   return { eventHash };
 }

@@ -5,6 +5,7 @@ import type { FileService } from '../fileService.js';
 import type { FileReplayContext } from '../fileEmit.js';
 import { normalizeVolumePath } from '../pathUtils.js';
 import type { WebDavAccess } from './access.js';
+import { logWebDavAuthFailure } from './access.js';
 import { debugEnabled } from '../debug.js';
 import { lockDiscovery, multistatus, responseHref } from './xml.js';
 
@@ -143,6 +144,7 @@ function ensureWebDavReady(
   }
   if (!access.isAuthenticated()) {
     if (!access.checkAuth(req.headers.authorization)) {
+      logWebDavAuthFailure(access, req.headers.authorization);
       unauthorized(res);
       return false;
     }

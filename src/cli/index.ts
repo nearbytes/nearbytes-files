@@ -119,7 +119,7 @@ async function runRepl(): Promise<void> {
     console.error(`WebDAV: ${ctx.webdav.baseUrl}/ (registered volumes at root)`);
     if (profile !== null) {
       console.error(
-        `  Basic user=${profile} password=<profile-secret-password-part> — re-auth after profile use`,
+        `  Finder: user="${profile}" password=<part after ":" in profile secret> — type "webdav status" to see login state`,
       );
     } else {
       console.error('  Requires an active profile (profile add / profile use) before serving paths');

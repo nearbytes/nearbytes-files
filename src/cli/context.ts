@@ -30,6 +30,9 @@ export interface Context {
   lastTimelineEvents: import('../fileService.js').TimelineEvent[] | null;
   webdavAuthGeneration: number;
   webdavAuthenticatedGeneration: number | null;
+  /** Set when a WebDAV client completes successful Basic auth for the current generation. */
+  webdavLastAuthProfile: string | null;
+  webdavLastAuthAt: number | null;
   /**
    * Current "remote working directory" inside the active volume — used by
    * FTP-style commands so users can `cd notes/2026 && ls`. Empty string
@@ -71,6 +74,8 @@ export async function createContext(
     lastTimelineEvents: null,
     webdavAuthGeneration: 0,
     webdavAuthenticatedGeneration: null,
+    webdavLastAuthProfile: null,
+    webdavLastAuthAt: null,
     remoteCwd: '',
 
     async destroy(): Promise<void> {

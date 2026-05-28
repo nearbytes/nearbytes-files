@@ -1,6 +1,7 @@
 import type { Context } from '../cli/context.js';
 import { parseBasicAuth } from './auth.js';
 import { profileWebDavPassword } from '../cli/volumeSessionStore.js';
+import { debugEnabled } from '../debug.js';
 
 export interface WebDavAccess {
   readonly authGeneration: number;
@@ -23,7 +24,16 @@ export function createWebDavAccess(ctx: Context): WebDavAccess {
       return ctx.webdavAuthenticatedGeneration === ctx.webdavAuthGeneration;
     },
     markAuthenticated() {
+      const profile = this.getActiveProfile();
+      const wasAuthenticated = this.isAuthenticated();
       ctx.webdavAuthenticatedGeneration = ctx.webdavAuthGeneration;
+      if (!wasAuthenticated && profile !== null) {
+        ctx.webdavLastAuthAt = Date.now();
+        ctx.webdavLastAuthProfile = profile.name;
+        console.error(
+          `[nearbytes-webdav] Client authenticated (profile "${profile.name}") — mount should work until profile use or webdav logout`,
+        );
+      }
     },
     checkAuth(header) {
       const basic = parseBasicAuth(header);
@@ -63,4 +73,33 @@ export function createWebDavAccess(ctx: Context): WebDavAccess {
 export function invalidateWebDavAuth(ctx: Context): void {
   ctx.webdavAuthGeneration += 1;
   ctx.webdavAuthenticatedGeneration = null;
+  ctx.webdavLastAuthProfile = null;
+  ctx.webdavLastAuthAt = null;
+}
+
+/** Human-readable reason for a failed Authorization header (for logs / status). */
+export function describeWebDavAuthFailure(
+  access: WebDavAccess,
+  authHeader: string | undefined,
+): string {
+  if (access.getActiveProfile() === null) {
+    return 'no active sync profile in nbf (run profile add / profile use)';
+  }
+  const basic = parseBasicAuth(authHeader);
+  if (basic === null) {
+    return 'missing or invalid Basic Authorization header';
+  }
+  const profile = access.getActiveProfile()!;
+  if (basic.username !== profile.name) {
+    return `username "${basic.username}" does not match active profile "${profile.name}"`;
+  }
+  if (basic.password !== profileWebDavPassword(profile.secret)) {
+    return 'password does not match active profile secret (use the part after ":" in the profile secret)';
+  }
+  return 'unknown';
+}
+
+export function logWebDavAuthFailure(access: WebDavAccess, authHeader: string | undefined): void {
+  if (!debugEnabled('webdav')) return;
+  console.error(`[nearbytes-webdav] auth failed: ${describeWebDavAuthFailure(access, authHeader)}`);
 }

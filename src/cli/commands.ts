@@ -937,6 +937,10 @@ ${cyan('Volume connections')}
   timeline live                          Reset cursor to live head ${dim('(alias: timeline head)')}
   refresh                                Reload active volume state
 
+${cyan('WebDAV (local mount)')}
+  webdav status                          Show URL, profile credentials hint, client login state
+  webdav logout                          Force Finder to re-authenticate
+
 ${cyan('Profiles (sync keypairs — many served in parallel)')}
   profile add <name> <secret>            Add a named profile slot ${dim('(first becomes active)')}
   profile use <name>                     Set the active profile ${dim('(signs publishes / dials)')}

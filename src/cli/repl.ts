@@ -79,6 +79,7 @@ import { cmdPeers, cmdMonitor, cmdWhoami } from './peersMonitor.js';
 import type { Context } from './context.js';
 import { restoreVolumeSession } from './volumeCommands.js';
 import { parseVolumeAddArgs, secretVolumePrefix } from './volumeSessionStore.js';
+import { cmdWebDavLogout, cmdWebDavStatus } from './webdavCommands.js';
 import { createReplCompleter } from './replCompleter.js';
 import {
   loadReplHistory,
@@ -413,6 +414,19 @@ async function dispatch(ctx: Context, tokens: string[], rl: readline.Interface):
       if (!name) throw new Error('Usage: forget <volume-name>');
       await cmdVolumeForget(ctx, name);
       return;
+    }
+
+    case 'webdav': {
+      const [sub] = rest;
+      if (!sub || sub === 'status') {
+        cmdWebDavStatus(ctx);
+        return;
+      }
+      if (sub === 'logout') {
+        cmdWebDavLogout(ctx);
+        return;
+      }
+      throw new Error('Usage: webdav status | webdav logout');
     }
 
     // ---- profile / friend ----

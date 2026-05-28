@@ -1,5 +1,8 @@
 # webdav-v1 — local HTTPS mount per volume
 
+Normative package summary. Design notes: `nearbytes-design/design/webdav-v1.md`.
+Normative cross-repo spec: `nearbytes-specs/application/webdav-v1.md`.
+
 ## Transport
 
 - **HTTPS only**, bind **`127.0.0.1`** (default port `9843`).
@@ -20,7 +23,7 @@ WebDAV starts with **`nbf`** / **`nbf repl`** (interactive REPL) or **`node scri
 |------|--------|
 | `cli` | Stack traces and verbose diagnostics on CLI/REPL command errors (`nbf` only). |
 | `webdav` | One line per WebDAV request (method, URL, path, `Depth`, `Destination`) and one line per response (status, elapsed ms). |
-| `timing` | Per-request handler stage timings (`readBody`, `snapshotForSecret`, `getFileByPath`, …) and log-replay breakdown (`open`, `load`, `verify`, `materialize`, entry count). |
+| `timing` | Per-request handler stage timings (`readBody`, `snapshotForSecret`, `getFileByPath`, …) and replay timing when a cold or stale refresh runs. |
 
 Examples:
 
@@ -67,20 +70,44 @@ Finder. They MUST NOT become blocking application-level locks. Writes still
 commit as FILES events whose causal order is represented by observed-log-head
 dependencies; conflicts are resolved by v0.5 replay.
 
-## Projection And Performance Model
+## Projection And In-Memory Channel Replay
 
-WebDAV projection uses a materialized FILES snapshot (`MaterializedFileSystem`)
-plus observed channel head, scoped per secret.
+WebDAV reads a per-secret **in-memory channel replay** owned by `FileService`, not
+the raw on-disk log on every request.
 
-- Read operations (`PROPFIND`, `GET`, `HEAD`) consume the in-memory snapshot.
-- Writes (`PUT`, `DELETE`, `MKCOL`, `MOVE`) go through `FileService`, then
-  invalidate the per-secret snapshot freshness marker.
-- Refresh computes canonical replay from log and MAY reuse the previous
-  materialized state as a seed when the ordered event stream keeps the previous
-  prefix, applying only appended events incrementally.
+### Cache contents
 
-This optimization is performance-only: it MUST preserve exact replay semantics
-defined by FILES v0.5.
+For each channel secret the implementation keeps a `FileReplayContext`:
+
+- **ordered hydrated entries** — causally ordered `EventLogEntry` values (payload already decrypted);
+- **materialized filesystem** — `MaterializedFileSystem` from FILES v0.5 replay;
+- **live decryption keys** — wrapped file keys indexed by live path;
+- **observed channel head** — last FILES event hash in replay order.
+
+### Lifecycle
+
+| Phase | Behavior |
+|-------|----------|
+| **Cold open** | First `getReplayContext` for a secret loads event hashes from storage, hydrates payloads, verifies signatures, topologically orders, and materializes. Cost is **O(n)** in channel event count. |
+| **Warm read** | Subsequent `getReplayContext` returns the cached context with **no disk I/O** (`timeline`, `ls`, WebDAV `PROPFIND`/`GET`). |
+| **Local write** | After `emitFileEvent`, the new entry is appended in memory via `extendFileReplayContext` and incremental materialization over **only** the new entries. The full channel MUST NOT be reloaded from disk. |
+| **External sync** | When another process appends to the same `dataDir`, the implementation calls `markReplayStale`. The next read merges **only new event hashes** from disk into the in-memory log, then re-materializes incrementally when the ordered prefix is preserved. |
+
+These steps are performance optimizations. Implementations MUST preserve the same
+live filesystem state as a full canonical replay from storage.
+
+### PROPFIND sizes
+
+macOS WebDAV clients use `getcontentlength` from `PROPFIND` (not only `GET`).
+`CREATE_FILE` inner payloads do not yet carry plaintext length. Implementations
+SHOULD:
+
+1. record plaintext size in an in-process cache keyed by content block hash on write;
+2. apply cached sizes to materialized file metadata on replay; and
+3. for WebDAV reads only, MAY decrypt live blobs once when size is still unknown
+   (`enrichSizes`).
+
+`HEAD` SHOULD send `Content-Length` when the materialized size is known.
 
 ## Lifecycle
 

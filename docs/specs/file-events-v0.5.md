@@ -2,6 +2,7 @@
 
 Package-local summary of the normative spec in
 `nearbytes-specs/application/file-events-v0.5.md`.
+Design notes: `nearbytes-design/design/file-events-v0.5.md`.
 
 v0.5 keeps the v0.4 inner payload verbs:
 
@@ -67,11 +68,22 @@ The current implementation uses the v0.5 replay and emission model:
 4. uses timestamps only between currently ready events;
 5. resolves valid target conflicts as latest-wins.
 
-Materialization implementation supports both:
+### Materialization
 
-- full replay from ordered canonical entries; and
-- incremental replay from an existing materialized state plus appended entries,
-  provided the newly ordered stream preserves the previous ordered prefix.
+- **Full replay** from ordered canonical entries is canonical.
+- **Incremental replay** from an existing materialized state plus appended entries
+  is allowed when the newly ordered stream preserves the previous ordered prefix.
+- Incremental replay MUST be observationally equivalent to full replay.
 
-Incremental replay is an implementation optimization only and MUST be
-observationally equivalent to full replay.
+### In-memory channel log (`FileService`)
+
+Conforming `nearbytes-files` runtimes keep the hydrated channel log in memory per
+secret:
+
+- **cold**: load from `nearbytes-log`, verify, order, materialize once;
+- **warm**: serve `timeline`, listings, and WebDAV from cache without re-reading disk;
+- **local append**: after each emitted event, extend the cache in memory (no full reload);
+- **stale**: after external `dataDir` changes, merge only new events from disk on the next read.
+
+`loadFileReplayContext` implements cold load and stale merge. `extendFileReplayContext`
+implements local append. WebDAV and CLI share the same cache through `getReplayContext`.

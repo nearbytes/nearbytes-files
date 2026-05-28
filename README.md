@@ -135,6 +135,17 @@ Secret:   myvol:password
 
 The server binds to `127.0.0.1` and uses a local self-signed certificate. On macOS Finder choose **Go → Connect to Server…** and enter the URL above. On clients that require a trusted certificate, accept/trust the generated local certificate for this machine.
 
+**Performance:** each volume keeps its hydrated event log and materialized filesystem in memory after the first access. `timeline`, `ls`, and WebDAV reads are instant on a warm cache; only the first open (or a sync from another process) reloads events from disk. Local writes append to the in-memory log without a full reload.
+
+**Debug flags** (no environment variables):
+
+```sh
+yarn repl --debug webdav,timing    # request log + replay timings
+yarn repl --webdav-port 9844
+```
+
+See `docs/specs/webdav-v1.md` for all `--debug` areas.
+
 ### One-shot examples
 
 ```sh

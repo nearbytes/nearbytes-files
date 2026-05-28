@@ -1,12 +1,18 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import type { FileService } from '../fileService.js';
+import type { MaterializedFileSystem } from '../fileMaterializer.js';
 import { normalizeVolumePath } from '../pathUtils.js';
 import { credentialsFromRequest } from './auth.js';
-import { multistatus, responseHref } from './xml.js';
+import { lockDiscovery, multistatus, responseHref } from './xml.js';
 
 export interface WebDavHandlerDeps {
   readonly fileService: FileService;
   readonly etagForPath: (secret: string, path: string) => Promise<string | undefined>;
+  readonly snapshotForSecret: (
+    secret: string,
+  ) => Promise<{ readonly fs: MaterializedFileSystem; readonly observedHead?: string }>;
 }
 
 function send(
@@ -17,7 +23,12 @@ function send(
 ): void {
   const extra =
     body === undefined ? { 'Content-Length': '0' } : { 'Content-Length': String(Buffer.byteLength(body)) };
-  res.writeHead(status, { ...extra, ...headers });
+  res.writeHead(status, {
+    'Cache-Control': 'no-store',
+    Pragma: 'no-cache',
+    ...extra,
+    ...headers,
+  });
   if (body !== undefined) res.end(body);
   else res.end();
 }
@@ -30,14 +41,62 @@ function parseUrl(req: IncomingMessage): { volume: string; inner: string } | nul
   const url = new URL(req.url ?? '/', 'https://localhost');
   const segments = url.pathname.split('/').filter((s) => s.length > 0);
   if (segments.length === 0) return null;
-  const volume = decodeURIComponent(segments[0]!);
-  const inner = segments.length > 1 ? normalizeVolumePath(segments.slice(1).join('/')) : '';
+  const decodedSegments = segments.map((segment) => decodeURIComponent(segment));
+  const volume = decodedSegments[0]!;
+  const inner = decodedSegments.length > 1 ? normalizeVolumePath(decodedSegments.slice(1).join('/')) : '';
   return { volume, inner };
+}
+
+function webdavDebugEnabled(): boolean {
+  return process.env['NEARBYTES_WEBDAV_DEBUG'] === '1';
+}
+
+function debugRequest(req: IncomingMessage, inner: string): void {
+  if (!webdavDebugEnabled()) return;
+  const depth = Array.isArray(req.headers.depth) ? req.headers.depth[0] : req.headers.depth;
+  const destination = Array.isArray(req.headers.destination)
+    ? req.headers.destination[0]
+    : req.headers.destination;
+  console.error(
+    `[nearbytes-webdav] ${new Date().toISOString()} ${req.method ?? 'UNKNOWN'} ${req.url ?? '/'} path=${JSON.stringify(inner)}` +
+      (depth !== undefined ? ` depth=${depth}` : '') +
+      (destination !== undefined ? ` destination=${destination}` : ''),
+  );
+}
+
+function debugResponse(req: IncomingMessage, res: ServerResponse, inner: string): void {
+  if (!webdavDebugEnabled()) return;
+  const started = performance.now();
+  res.once('finish', () => {
+    const elapsed = Math.round((performance.now() - started) * 10) / 10;
+    console.error(
+      `[nearbytes-webdav] ${new Date().toISOString()} -> ${res.statusCode} ${req.method ?? 'UNKNOWN'} path=${JSON.stringify(inner)} ${elapsed}ms`,
+    );
+  });
+}
+
+function isBrowserProbe(req: IncomingMessage): boolean {
+  const pathname = new URL(req.url ?? '/', 'https://localhost').pathname;
+  return (
+    pathname === '/favicon.ico' ||
+    pathname === '/apple-touch-icon.png' ||
+    pathname === '/apple-touch-icon-precomposed.png'
+  );
 }
 
 function hrefFor(volume: string, inner: string): string {
   const encoded = inner.length > 0 ? `/${inner.split('/').map(encodeURIComponent).join('/')}` : '';
   return `/${encodeURIComponent(volume)}${encoded}`;
+}
+
+function basename(path: string): string {
+  const index = path.lastIndexOf('/');
+  return index < 0 ? path : path.slice(index + 1);
+}
+
+function isMacOsMetadataPath(path: string): boolean {
+  const name = basename(path);
+  return name === '.DS_Store' || name.startsWith('._');
 }
 
 async function readBody(req: IncomingMessage): Promise<Buffer> {
@@ -51,8 +110,28 @@ function underScope(prefix: string, path: string): boolean {
   return path === prefix || path.startsWith(`${prefix}/`);
 }
 
+function isDirectChild(parent: string, path: string): boolean {
+  if (path === parent) return false;
+  if (parent === '') return !path.includes('/');
+  if (!path.startsWith(`${parent}/`)) return false;
+  return !path.slice(parent.length + 1).includes('/');
+}
+
 export function createWebDavHandler(deps: WebDavHandlerDeps) {
+  /**
+   * Finder and other WebDAV clients expect RFC4918 LOCK/UNLOCK round-trips
+   * before writes. These tokens are a transport compatibility shim only:
+   * they do not gate PUT/MOVE/DELETE and they are not FILES application locks.
+   * Causal overwrite semantics stay in FILES v0.5 observed-log-head refs.
+   */
+  const lockTokens = new Set<string>();
+
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (isBrowserProbe(req)) {
+      send(res, 404);
+      return;
+    }
+
     const parsed = parseUrl(req);
     if (parsed === null) {
       send(res, 404);
@@ -68,38 +147,84 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
     const { fileService, etagForPath } = deps;
     const secret = creds.secret;
     const inner = parsed.inner;
+    debugRequest(req, inner);
+    debugResponse(req, res, inner);
 
     try {
       if (req.method === 'OPTIONS') {
         send(res, 204, undefined, {
-          Allow: 'OPTIONS,GET,HEAD,PUT,DELETE,PROPFIND,MKCOL,MOVE',
+          Allow: 'OPTIONS,GET,HEAD,PUT,DELETE,PROPFIND,MKCOL,MOVE,LOCK,UNLOCK',
           DAV: '1,2',
         });
         return;
       }
 
+      if (req.method === 'LOCK') {
+        await readBody(req);
+        const token = `opaquelocktoken:${randomUUID()}`;
+        lockTokens.add(token);
+        send(res, 200, lockDiscovery(hrefFor(parsed.volume, inner), token), {
+          'Content-Type': 'application/xml; charset=utf-8',
+          'Lock-Token': `<${token}>`,
+        });
+        return;
+      }
+
+      if (req.method === 'UNLOCK') {
+        const raw = req.headers['lock-token'];
+        const value = Array.isArray(raw) ? raw[0] : raw;
+        if (value !== undefined) {
+          lockTokens.delete(value.replace(/^<|>$/g, ''));
+        }
+        send(res, 204);
+        return;
+      }
+
       if (req.method === 'PROPFIND') {
-        const [files, dirs] = await Promise.all([
-          fileService.listFiles(secret),
-          fileService.listDirectories(secret),
-        ]);
+        const depthHeader = Array.isArray(req.headers.depth) ? req.headers.depth[0] : req.headers.depth;
+        const depth = depthHeader ?? 'infinity';
+        if (inner !== '' && isMacOsMetadataPath(inner)) {
+          send(res, 207, multistatus(responseHref(hrefFor(parsed.volume, inner), {
+            isCollection: false,
+            etag: 'nearbytes-macos-metadata',
+            length: 0,
+          })), { 'Content-Type': 'application/xml; charset=utf-8' });
+          return;
+        }
+
+        const snapshot = await deps.snapshotForSecret(secret);
+        const files = [...snapshot.fs.files.values()].sort((a, b) => a.path.localeCompare(b.path));
+        const dirs = [...snapshot.fs.directories.values()].sort((a, b) => a.path.localeCompare(b.path));
         const parts: string[] = [];
         const baseHref = hrefFor(parsed.volume, inner);
-        const baseEtag = inner.length > 0 ? await etagForPath(secret, inner) : undefined;
-        const baseIsDir =
-          inner === '' ||
-          dirs.some((d) => d.path === inner) ||
-          files.some((f) => f.path === inner);
+        const baseEtag =
+          inner.length > 0
+            ? snapshot.fs.fileOrigins.get(inner) ?? snapshot.fs.entryHeads.get(inner) ?? snapshot.observedHead
+            : snapshot.observedHead;
+        const baseFile = files.find((f) => f.path === inner);
+        const baseIsDir = inner === '' || dirs.some((d) => d.path === inner);
+        if (inner !== '' && baseFile === undefined && !baseIsDir) {
+          send(res, 404);
+          return;
+        }
         parts.push(
-          responseHref(baseHref.endsWith('/') ? baseHref : `${baseHref}/`, {
+          responseHref(baseIsDir && !baseHref.endsWith('/') ? `${baseHref}/` : baseHref, {
             isCollection: baseIsDir,
             etag: baseEtag,
+            length: baseFile?.size,
+            lastModified: baseFile !== undefined ? new Date(baseFile.createdAt) : undefined,
           }),
         );
 
+        if (depth === '0') {
+          send(res, 207, multistatus(parts.join('\n')), { 'Content-Type': 'application/xml; charset=utf-8' });
+          return;
+        }
+
         for (const dir of dirs) {
           if (!underScope(inner, dir.path) || dir.path === inner) continue;
-          const etag = await etagForPath(secret, dir.path);
+          if (depth === '1' && !isDirectChild(inner, dir.path)) continue;
+          const etag = snapshot.fs.entryHeads.get(dir.path) ?? snapshot.observedHead;
           parts.push(
             responseHref(`${hrefFor(parsed.volume, dir.path)}/`, {
               isCollection: true,
@@ -109,7 +234,9 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
         }
         for (const file of files) {
           if (!underScope(inner, file.path)) continue;
-          const etag = await etagForPath(secret, file.path);
+          if (file.path === inner) continue;
+          if (depth === '1' && !isDirectChild(inner, file.path)) continue;
+          const etag = snapshot.fs.fileOrigins.get(file.path) ?? snapshot.fs.entryHeads.get(file.path);
           parts.push(
             responseHref(hrefFor(parsed.volume, file.path), {
               isCollection: false,
@@ -124,13 +251,32 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
       }
 
       if (req.method === 'GET' || req.method === 'HEAD') {
-        const files = await fileService.listFiles(secret);
-        const meta = files.find((f) => f.path === inner);
+        if (isMacOsMetadataPath(inner)) {
+          const headers = {
+            'Content-Type': 'application/octet-stream',
+            ETag: '"nearbytes-macos-metadata"',
+          };
+          if (req.method === 'HEAD') {
+            send(res, 200, undefined, headers);
+            return;
+          }
+          res.writeHead(200, {
+            'Cache-Control': 'no-store',
+            Pragma: 'no-cache',
+            ...headers,
+            'Content-Length': '0',
+          });
+          res.end();
+          return;
+        }
+
+        const snapshot = await deps.snapshotForSecret(secret);
+        const meta = snapshot.fs.files.get(inner);
         if (meta === undefined) {
           send(res, 404);
           return;
         }
-        const etag = await etagForPath(secret, inner);
+        const etag = snapshot.fs.fileOrigins.get(inner) ?? snapshot.fs.entryHeads.get(inner);
         const headers: Record<string, string> = {
           'Content-Type': meta.mimeType ?? 'application/octet-stream',
         };
@@ -140,13 +286,22 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
           return;
         }
         const data = await fileService.getFile(secret, meta.blobHash);
-        res.writeHead(200, { ...headers, 'Content-Length': String(data.length) });
+        res.writeHead(200, {
+          'Cache-Control': 'no-store',
+          Pragma: 'no-cache',
+          ...headers,
+          'Content-Length': String(data.length),
+        });
         res.end(data);
         return;
       }
 
       if (req.method === 'PUT') {
         const body = await readBody(req);
+        if (isMacOsMetadataPath(inner)) {
+          send(res, 201, undefined, { ETag: '"nearbytes-macos-metadata"' });
+          return;
+        }
         await fileService.addFile(secret, inner, body);
         const etag = await etagForPath(secret, inner);
         const putHeaders: Record<string, string> = {};
@@ -156,6 +311,10 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
       }
 
       if (req.method === 'DELETE') {
+        if (isMacOsMetadataPath(inner)) {
+          send(res, 204);
+          return;
+        }
         await fileService.delete(secret, inner);
         send(res, 204);
         return;
@@ -175,13 +334,20 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
           return;
         }
         const destUrl = new URL(destHeader);
-        const destSegs = destUrl.pathname.split('/').filter((s) => s.length > 0);
+        const destSegs = destUrl.pathname
+          .split('/')
+          .filter((s) => s.length > 0)
+          .map((segment) => decodeURIComponent(segment));
         if (destSegs[0] !== parsed.volume) {
           send(res, 403);
           return;
         }
         const toPath =
           destSegs.length > 1 ? normalizeVolumePath(destSegs.slice(1).join('/')) : '';
+        if (isMacOsMetadataPath(inner) || isMacOsMetadataPath(toPath)) {
+          send(res, 201);
+          return;
+        }
         await fileService.rename(secret, inner, toPath);
         send(res, 201);
         return;

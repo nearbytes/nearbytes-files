@@ -8,7 +8,7 @@ import { createSymmetricKey } from 'nearbytes-crypto';
 import { computeHash } from 'nearbytes-crypto';
 import { serializeEventEnvelope } from 'nearbytes-log';
 import { hydrateSignedEvent } from 'nearbytes-log';
-import { emitFileEvent, lineageAtPath, loadMaterializedFileSystem } from './fileEmit.js';
+import { emitFileEvent, lineageAtPath, loadFileReplayContext } from './fileEmit.js';
 
 /**
  * Sets up a new channel from a secret
@@ -65,7 +65,7 @@ export async function storeData(
   // 6. Encrypt the symmetric key
   const encryptedKey = await crypto.encryptSym(symmetricKey, keyEncryptionKey);
 
-  // 7. Create event payload (spec: file-events-v0.4)
+  // 7. Create event payload.
   const payload: EventPayload = {
     type: EventType.CREATE_FILE,
     path: fileName,
@@ -74,12 +74,13 @@ export async function storeData(
     createdAt: Date.now(),
   };
 
-  const fs = await loadMaterializedFileSystem(secret as string, crypto, channelStorage);
+  const { fs, observedHead } = await loadFileReplayContext(secret as string, crypto, channelStorage);
   const eventHash = await emitFileEvent(
     crypto,
     keyPair,
     channelStorage,
     payload,
+    observedHead,
     [lineageAtPath(fs, fileName)],
     [dataHash],
   );
@@ -180,7 +181,7 @@ export async function storeDataDeduplicated(
   // 8. Encrypt the symmetric key
   const encryptedKey = await crypto.encryptSym(symmetricKey, keyEncryptionKey);
 
-  // 9. Create event payload (spec: file-events-v0.4)
+  // 9. Create event payload.
   const payload: EventPayload = {
     type: EventType.CREATE_FILE,
     path: fileName,
@@ -189,12 +190,13 @@ export async function storeDataDeduplicated(
     createdAt: Date.now(),
   };
 
-  const fs = await loadMaterializedFileSystem(secret as string, crypto, channelStorage);
+  const { fs, observedHead } = await loadFileReplayContext(secret as string, crypto, channelStorage);
   const eventHash = await emitFileEvent(
     crypto,
     keyPair,
     channelStorage,
     payload,
+    observedHead,
     [lineageAtPath(fs, fileName)],
     [dataHash],
   );
@@ -221,12 +223,13 @@ export async function deletePath(
     deletedAt: Date.now(),
   };
 
-  const fs = await loadMaterializedFileSystem(secret as string, crypto, channelStorage);
+  const { fs, observedHead } = await loadFileReplayContext(secret as string, crypto, channelStorage);
   const eventHash = await emitFileEvent(
     crypto,
     keyPair,
     channelStorage,
     payload,
+    observedHead,
     [lineageAtPath(fs, path)],
     [],
   );

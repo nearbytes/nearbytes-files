@@ -41,3 +41,19 @@ ${modifiedLine}
 </D:propstat>
 </D:response>`;
 }
+
+export function lockDiscovery(href: string, token: string): string {
+  return `<?xml version="1.0" encoding="utf-8"?>
+<D:prop xmlns:D="DAV:">
+<D:lockdiscovery>
+<D:activelock>
+<D:locktype><D:write/></D:locktype>
+<D:lockscope><D:exclusive/></D:lockscope>
+<D:depth>infinity</D:depth>
+<D:timeout>Second-3600</D:timeout>
+<D:locktoken><D:href>${escapeXml(token)}</D:href></D:locktoken>
+<D:lockroot><D:href>${escapeXml(href)}</D:href></D:lockroot>
+</D:activelock>
+</D:lockdiscovery>
+</D:prop>`;
+}

@@ -42,13 +42,13 @@ import {
   materialize,
   type MaterializedShadow,
 } from './fileMaterializer.js';
-import { toCanonicalEntries } from './fileLogEntries.js';
+import { observedLogHead, orderEventLogEntries, toCanonicalEntries } from './fileLogEntries.js';
 import {
   emitFileEvent,
   type CausalLineage,
+  loadFileReplayContext,
   lineagesForRename,
   lineageAtPath,
-  loadMaterializedFileSystem,
 } from './fileEmit.js';
 import { normalizeVolumePath } from './pathUtils.js';
 
@@ -350,7 +350,7 @@ async function addFileWithDeps(
   const blobHash = await channelStorage.blocks.store(encrypted.encryptedData, true);
 
   const createdAt = now();
-  const fs = await loadMaterializedFileSystem(normalizedSecret, crypto, channelStorage);
+  const { fs, observedHead } = await loadFileReplayContext(normalizedSecret, crypto, channelStorage);
   await appendCreateEvent(channelStorage, crypto, keyPair, {
     path,
     blobHash,
@@ -358,6 +358,7 @@ async function addFileWithDeps(
     contentType: encrypted.contentType,
     mimeType: opts?.mimeType,
     createdAt,
+    observedHead,
     lineages: [lineageAtPath(fs, path)],
   });
 
@@ -405,10 +406,16 @@ async function mkdirWithDeps(
   const normalizedSecret = normalizeSecret(secret);
   const keyPair = await crypto.deriveKeys(normalizedSecret);
   const createdAt = now();
-  const fs = await loadMaterializedFileSystem(normalizedSecret, crypto, channelStorage);
-  await appendMkdirEvent(channelStorage, crypto, keyPair, path, createdAt, [
-    lineageAtPath(fs, path),
-  ]);
+  const { fs, observedHead } = await loadFileReplayContext(normalizedSecret, crypto, channelStorage);
+  await appendMkdirEvent(
+    channelStorage,
+    crypto,
+    keyPair,
+    path,
+    createdAt,
+    [lineageAtPath(fs, path)],
+    observedHead,
+  );
   return { path, createdAt, explicit: true };
 }
 
@@ -422,8 +429,16 @@ async function deletePathWithDeps(
   const path = normalizeVolumePath(rawPath);
   const normalizedSecret = normalizeSecret(secret);
   const keyPair = await crypto.deriveKeys(normalizedSecret);
-  const fs = await loadMaterializedFileSystem(normalizedSecret, crypto, channelStorage);
-  await appendDeleteEvent(channelStorage, crypto, keyPair, path, now(), [lineageAtPath(fs, path)]);
+  const { fs, observedHead } = await loadFileReplayContext(normalizedSecret, crypto, channelStorage);
+  await appendDeleteEvent(
+    channelStorage,
+    crypto,
+    keyPair,
+    path,
+    now(),
+    [lineageAtPath(fs, path)],
+    observedHead,
+  );
 }
 
 async function renameWithDeps(
@@ -458,6 +473,7 @@ async function renameWithDeps(
     toPath,
     renamedAt,
     lineagesForRename(fs, fromPath, toPath),
+    observedHashFromEntries(entries),
   );
 
   return { fromPath, toPath };
@@ -820,6 +836,7 @@ async function importRecipientReferencesWithDeps(
   const takenNames = new Set(files.map((file) => file.path));
   const imported: FileMetadata[] = [];
   let nextTimestamp = nextCreateTimestamp(entries, now());
+  let observedHead = observedHashFromEntries(entries);
 
   for (const item of bundle.items) {
     const finalName = resolveImportedFilename(item.name, takenNames);
@@ -837,13 +854,14 @@ async function importRecipientReferencesWithDeps(
     const createdAt = resolveImportedCreatedAt(item.createdAt, nextTimestamp);
 
     const fs = materialize(toCanonicalEntries(entries));
-    await appendCreateEvent(channelStorage, crypto, destinationKeyPair, {
+    observedHead = await appendCreateEvent(channelStorage, crypto, destinationKeyPair, {
       path: finalName,
       blobHash: descriptor.h,
       encryptedKey,
       contentType: descriptor.t,
       mimeType: item.mime,
       createdAt,
+      observedHead,
       lineages: [lineageAtPath(fs, finalName)],
     });
 
@@ -972,9 +990,10 @@ function mapEntriesToTimeline(entries: EventLogEntry[]): TimelineEvent[] {
 
 function buildTimelineRows(entries: EventLogEntry[]): StoredTimelineRow[] {
   const rows: StoredTimelineRow[] = [];
+  const orderedEntries = orderEventLogEntries(entries);
 
-  for (let sequence = 0; sequence < entries.length; sequence += 1) {
-    const entry = entries[sequence];
+  for (let sequence = 0; sequence < orderedEntries.length; sequence += 1) {
+    const entry = orderedEntries[sequence]!;
     const payload = entry.signedEvent.payload;
 
     if (payload.type === EventType.CREATE_FILE) {
@@ -1171,7 +1190,6 @@ function buildTimelineRows(entries: EventLogEntry[]): StoredTimelineRow[] {
     }
   }
 
-  rows.sort(compareTimelineRows);
   return rows;
 }
 
@@ -1197,6 +1215,7 @@ async function upgradeLegacyFilesForExport(
   const fileMap = new Map(files.map((file) => [file.path, file]));
   let upgradedCount = 0;
   let timestamp = Math.max(now(), ...files.map((file) => file.createdAt + 1), 0);
+  let observedHead = observedHashFromEntries(entries);
 
   for (const path of paths) {
     const file = requireStoredFile(fileMap, path);
@@ -1212,13 +1231,14 @@ async function upgradeLegacyFilesForExport(
     const encrypted = await encryptFileForVolume(crypto, keyPair.privateKey, plaintext);
     const blobHash = await channelStorage.blocks.store(encrypted.encryptedData, true);
     const fs = materialize(toCanonicalEntries(entries));
-    await appendCreateEvent(channelStorage, crypto, keyPair, {
+    observedHead = await appendCreateEvent(channelStorage, crypto, keyPair, {
       path: file.path,
       blobHash,
       encryptedKey: encrypted.encryptedKey,
       contentType: encrypted.contentType,
       mimeType: file.mimeType,
       createdAt: timestamp,
+      observedHead,
       lineages: [lineageAtPath(fs, file.path)],
     });
 
@@ -1242,6 +1262,7 @@ async function importSourceBundleItems(
   const takenNames = new Set(existingFiles.map((file) => file.path));
   const imported: FileMetadata[] = [];
   let nextTimestamp = nextCreateTimestamp(entries, now());
+  let observedHead = observedHashFromEntries(entries);
 
   for (const item of bundle.items) {
     const finalName = resolveImportedFilename(item.name, takenNames);
@@ -1257,13 +1278,14 @@ async function importSourceBundleItems(
     const createdAt = resolveImportedCreatedAt(item.createdAt, nextTimestamp);
 
     const fs = materialize(toCanonicalEntries([...entries]));
-    await appendCreateEvent(channelStorage, crypto, destinationKeyPair, {
+    observedHead = await appendCreateEvent(channelStorage, crypto, destinationKeyPair, {
       path: finalName,
       blobHash: item.ref.c.h,
       encryptedKey,
       contentType: item.ref.c.t,
       mimeType: item.mime,
       createdAt,
+      observedHead,
       lineages: [lineageAtPath(fs, finalName)],
     });
 
@@ -1298,6 +1320,11 @@ function nextCreateTimestamp(entries: readonly EventLogEntry[], fallbackNow: num
   return Math.max(fallbackNow, maxTimestamp + 1);
 }
 
+function observedHashFromEntries(entries: readonly EventLogEntry[]): Hash | undefined {
+  const head = observedLogHead(entries);
+  return head !== undefined ? createHash(head) : undefined;
+}
+
 function resolveImportedCreatedAt(
   preferredCreatedAt: number | undefined,
   minimumCreatedAt: number,
@@ -1313,45 +1340,6 @@ function requireStoredFile(
   const file = files.get(path);
   if (!file) throw new Error(`File "${path}" does not exist`);
   return file;
-}
-
-function compareTimelineRows(left: StoredTimelineRow, right: StoredTimelineRow): number {
-  if (left.hasExplicitTimestamp !== right.hasExplicitTimestamp) {
-    return left.sequence - right.sequence;
-  }
-  if (left.hasExplicitTimestamp && right.hasExplicitTimestamp) {
-    if (left.timestamp !== right.timestamp) return left.timestamp - right.timestamp;
-  } else if (left.sequence !== right.sequence) {
-    return left.sequence - right.sequence;
-  }
-
-  if (left.path !== right.path) return left.path < right.path ? -1 : 1;
-
-  const leftTie = tieBreakerFor(left);
-  const rightTie = tieBreakerFor(right);
-  if (leftTie !== rightTie) return leftTie < rightTie ? -1 : 1;
-
-  if (left.eventHash !== right.eventHash) return left.eventHash < right.eventHash ? -1 : 1;
-  return 0;
-}
-
-function tieBreakerFor(row: StoredTimelineRow): string {
-  switch (row.type) {
-    case EventType.CREATE_FILE:
-      return `C:${row.blobHash ?? ''}`;
-    case EventType.MKDIR:
-      return 'K';
-    case EventType.RENAME:
-      return `R:${row.toPath ?? ''}`;
-    case EventType.DELETE:
-      return 'D';
-    case EventType.DECLARE_IDENTITY:
-      return `I:${row.displayName ?? row.authorPublicKey ?? ''}`;
-    case EventType.CHAT_MESSAGE:
-      return `M:${row.body ?? row.authorPublicKey ?? ''}`;
-    case EventType.APP_RECORD:
-      return `A:${row.protocol ?? ''}`;
-  }
 }
 
 function timelineSnippet(value: string | undefined, limit = 72): string | undefined {
@@ -1376,9 +1364,10 @@ async function appendCreateEvent(
     contentType: FileContentType;
     mimeType?: string;
     createdAt: number;
+    observedHead?: Hash;
     lineages: readonly CausalLineage[];
   },
-): Promise<void> {
+): Promise<Hash> {
   const contentDescriptor =
     input.contentType === 'm'
       ? ({ protocol: 'nb.content.manifest.v1', manifestHash: input.blobHash as Hash } as const)
@@ -1391,7 +1380,7 @@ async function appendCreateEvent(
     createdAt: input.createdAt,
     mimeType: input.mimeType,
   };
-  await emitFileEvent(crypto, keyPair, channelStorage, payload, input.lineages, [
+  return emitFileEvent(crypto, keyPair, channelStorage, payload, input.observedHead, input.lineages, [
     input.blobHash as Hash,
   ]);
 }
@@ -1403,9 +1392,10 @@ async function appendMkdirEvent(
   path: string,
   createdAt: number,
   lineages: readonly CausalLineage[],
-): Promise<void> {
+  observedHead?: Hash,
+): Promise<Hash> {
   const payload: EventPayload = { type: EventType.MKDIR, path, createdAt };
-  await emitFileEvent(crypto, keyPair, channelStorage, payload, lineages, []);
+  return emitFileEvent(crypto, keyPair, channelStorage, payload, observedHead, lineages, []);
 }
 
 async function appendDeleteEvent(
@@ -1415,9 +1405,10 @@ async function appendDeleteEvent(
   path: string,
   deletedAt: number,
   lineages: readonly CausalLineage[],
-): Promise<void> {
+  observedHead?: Hash,
+): Promise<Hash> {
   const payload: EventPayload = { type: EventType.DELETE, path, deletedAt };
-  await emitFileEvent(crypto, keyPair, channelStorage, payload, lineages, []);
+  return emitFileEvent(crypto, keyPair, channelStorage, payload, observedHead, lineages, []);
 }
 
 async function appendRenameEvent(
@@ -1428,9 +1419,10 @@ async function appendRenameEvent(
   toPath: string,
   renamedAt: number,
   lineages: readonly CausalLineage[],
-): Promise<void> {
+  observedHead?: Hash,
+): Promise<Hash> {
   const payload: EventPayload = { type: EventType.RENAME, fromPath, toPath, renamedAt };
-  await emitFileEvent(crypto, keyPair, channelStorage, payload, lineages, []);
+  return emitFileEvent(crypto, keyPair, channelStorage, payload, observedHead, lineages, []);
 }
 
 function normalizeSecret(secret: string): Secret {

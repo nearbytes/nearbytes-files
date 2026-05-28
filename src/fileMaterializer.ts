@@ -1,5 +1,5 @@
 /**
- * File-events-v0.4 materializer.
+ * File-events-v0.5 materializer.
  *
  * The materializer is the only place where the "cascade" semantics of the
  * file protocol live: implicit ancestor directories, recursive DELETE,
@@ -7,14 +7,10 @@
  * directory namespaces. Protocol events are pure syntax — every event
  * carries one user intent and no implicit dependencies.
  *
- * Conflict resolution is *first-event wins*: in deterministic replay
- * order, whichever event establishes a name in the file or directory
- * namespace claims it. Later events that would collide with that name
- * (e.g. `mkdir foo` after `put foo` was already a file, or
- * `rename foo bar` when `bar` already exists as something incompatible)
- * are recorded as `shadow` rows on the timeline and leave the
- * materialized state unchanged. Conflicts are normal — replay the
- * timeline at any point and you will see the same outcome.
+ * Conflict resolution is causal latest-wins in the canonical replay
+ * order. Later valid events replace live file/directory target conflicts;
+ * only invalid operations such as missing rename sources or rename-into-self
+ * are recorded as shadow rows without changing live state.
  *
  * Unknown event types are tolerated: the materializer warns once per
  * verb-string per replay and records a `{ kind: 'unknown' }` shadow row.
@@ -57,7 +53,7 @@ export interface MaterializedShadow {
 export type CanonicalEventKind = 'CREATE_FILE' | 'MKDIR' | 'DELETE' | 'RENAME' | 'OTHER';
 
 /**
- * Canonical, codec-agnostic view of a file-events-v0.4 event.
+ * Canonical, codec-agnostic view of a FILES event.
  * Callers translate their wire format (encrypted `EventPayload`, plain
  * `FileEvent`, etc.) to this shape before feeding the materializer.
  *
@@ -102,6 +98,8 @@ export interface MaterializedFileSystem {
    * source event without re-walking the timeline.
    */
   readonly fileOrigins: ReadonlyMap<string, string>;
+  /** Last event that directly wrote, removed, or moved this exact path. */
+  readonly entryHeads: ReadonlyMap<string, string>;
   /** Replay rejections, in the order they occurred. */
   readonly shadows: ReadonlyArray<{ readonly tiebreak: string; readonly reject: MaterializedShadow['reject'] }>;
 }
@@ -109,13 +107,13 @@ export interface MaterializedFileSystem {
 /**
  * Replay a stream of canonical events to produce the materialized
  * file-system state. Callers should pre-sort entries by the
- * file-events-v0.4 total order (timestamp → sequence → tiebreak); this
- * function applies them as given.
+ * FILES v0.5 replay order; this function applies them as given.
  */
 export function materialize(entries: readonly CanonicalEntry[]): MaterializedFileSystem {
   const files = new Map<string, FileMetadata>();
   const dirs = new Map<string, DirInfo>();
   const fileOrigins = new Map<string, string>();
+  const entryHeads = new Map<string, string>();
   const shadows: { tiebreak: string; reject: MaterializedShadow['reject'] }[] = [];
   const warnedVerbs = new Set<string>();
 
@@ -129,16 +127,16 @@ export function materialize(entries: readonly CanonicalEntry[]): MaterializedFil
   for (const { tiebreak, event } of entries) {
     switch (event.kind) {
       case 'CREATE_FILE':
-        applyCreateFile(event, files, dirs, fileOrigins, tiebreak, recordShadow.bind(null, tiebreak));
+        applyCreateFile(event, files, dirs, fileOrigins, entryHeads, tiebreak);
         break;
       case 'MKDIR':
-        applyMkdir(event, files, dirs, recordShadow.bind(null, tiebreak));
+        applyMkdir(event, files, dirs, fileOrigins, entryHeads, tiebreak);
         break;
       case 'DELETE':
-        applyDelete(event, files, dirs, fileOrigins);
+        applyDelete(event, files, dirs, fileOrigins, entryHeads, tiebreak);
         break;
       case 'RENAME':
-        applyRename(event, files, dirs, fileOrigins, recordShadow.bind(null, tiebreak));
+        applyRename(event, files, dirs, fileOrigins, entryHeads, tiebreak, recordShadow.bind(null, tiebreak));
         break;
       case 'OTHER': {
         if (!isKnownNonFileVerb(event.verb) && !warnedVerbs.has(event.verb)) {
@@ -162,7 +160,7 @@ export function materialize(entries: readonly CanonicalEntry[]): MaterializedFil
     });
   }
 
-  return { files, directories, fileOrigins, shadows };
+  return { files, directories, fileOrigins, entryHeads, shadows };
 }
 
 /** App-layer verbs that legitimately produce no filesystem effect. */
@@ -183,19 +181,15 @@ function applyCreateFile(
   files: Map<string, FileMetadata>,
   dirs: Map<string, DirInfo>,
   fileOrigins: Map<string, string>,
+  entryHeads: Map<string, string>,
   tiebreak: string,
-  shadow: (reject: MaterializedShadow['reject']) => void,
 ): void {
-  if (dirs.has(event.path)) {
-    shadow({ kind: 'file-where-dir', path: event.path });
-    return;
-  }
   for (const ancestor of ancestorPaths(event.path)) {
     if (files.has(ancestor)) {
-      shadow({ kind: 'ancestor-is-file', path: event.path, conflictingAncestor: ancestor });
-      return;
+      removeFile(files, dirs, fileOrigins, ancestor);
     }
   }
+  if (dirs.has(event.path)) removeDir(files, dirs, fileOrigins, event.path);
 
   /**
    * CREATE_FILE on an existing file replaces it (CRDT-trivial — same path,
@@ -213,6 +207,7 @@ function applyCreateFile(
     createdAt: event.createdAt,
   });
   fileOrigins.set(event.path, tiebreak);
+  entryHeads.set(event.path, tiebreak);
 
   if (!wasFile) {
     for (const ancestor of ancestorPaths(event.path)) {
@@ -236,23 +231,16 @@ function applyMkdir(
   event: Extract<CanonicalEvent, { kind: 'MKDIR' }>,
   files: Map<string, FileMetadata>,
   dirs: Map<string, DirInfo>,
-  shadow: (reject: MaterializedShadow['reject']) => void,
+  fileOrigins: Map<string, string>,
+  entryHeads: Map<string, string>,
+  tiebreak: string,
 ): void {
-  /**
-   * Reject the whole MKDIR if the target — or any ancestor — is currently a
-   * file. Partial application would silently introduce inconsistent
-   * intermediate dirs.
-   */
   for (const segment of pathChain(event.path)) {
     if (files.has(segment)) {
-      if (segment === event.path) {
-        shadow({ kind: 'dir-where-file', path: event.path });
-      } else {
-        shadow({ kind: 'ancestor-is-file', path: event.path, conflictingAncestor: segment });
-      }
-      return;
+      removeFile(files, dirs, fileOrigins, segment);
     }
   }
+  if (dirs.has(event.path)) removeDir(files, dirs, fileOrigins, event.path);
 
   for (const segment of pathChain(event.path)) {
     const existing = dirs.get(segment);
@@ -271,6 +259,7 @@ function applyMkdir(
       existing.createdAt = Math.min(existing.createdAt, event.createdAt);
     }
   }
+  entryHeads.set(event.path, tiebreak);
 }
 
 // ---------------------------------------------------------------------------
@@ -282,11 +271,12 @@ function applyDelete(
   files: Map<string, FileMetadata>,
   dirs: Map<string, DirInfo>,
   fileOrigins: Map<string, string>,
+  entryHeads: Map<string, string>,
+  tiebreak: string,
 ): void {
   if (files.has(event.path)) {
-    files.delete(event.path);
-    fileOrigins.delete(event.path);
-    decrementAncestors(dirs, event.path, 1);
+    removeFile(files, dirs, fileOrigins, event.path);
+    entryHeads.set(event.path, tiebreak);
     return;
   }
   if (!dirs.has(event.path)) {
@@ -295,25 +285,12 @@ function applyDelete(
      * (concurrent peers may both delete the same path). The timeline keeps
      * the event for audit; no shadow row is needed.
      */
+    entryHeads.set(event.path, tiebreak);
     return;
   }
 
-  let removedFileCount = 0;
-  for (const fpath of [...files.keys()]) {
-    if (isSelfOrDescendant(fpath, event.path)) {
-      files.delete(fpath);
-      fileOrigins.delete(fpath);
-      removedFileCount += 1;
-    }
-  }
-  for (const dpath of [...dirs.keys()]) {
-    if (isSelfOrDescendant(dpath, event.path)) {
-      dirs.delete(dpath);
-    }
-  }
-  if (removedFileCount > 0) {
-    decrementAncestors(dirs, event.path, removedFileCount);
-  }
+  removeDir(files, dirs, fileOrigins, event.path);
+  entryHeads.set(event.path, tiebreak);
 }
 
 /**
@@ -340,6 +317,8 @@ function applyRename(
   files: Map<string, FileMetadata>,
   dirs: Map<string, DirInfo>,
   fileOrigins: Map<string, string>,
+  entryHeads: Map<string, string>,
+  tiebreak: string,
   shadow: (reject: MaterializedShadow['reject']) => void,
 ): void {
   if (event.fromPath === event.toPath) return;
@@ -368,50 +347,51 @@ function applyRename(
       files.has(ancestor) &&
       !(fromKind === 'file' && ancestor === event.fromPath)
     ) {
-      shadow({ kind: 'ancestor-is-file', path: event.toPath, conflictingAncestor: ancestor });
-      return;
+      removeFile(files, dirs, fileOrigins, ancestor);
     }
   }
 
-  const toExists = files.has(event.toPath) || dirs.has(event.toPath);
-
-  if (toExists) {
-    const toKind = files.has(event.toPath) ? 'file' : 'dir';
-    if (fromKind !== toKind) {
-      shadow({ kind: 'target-exists-different-kind', target: event.toPath });
-      return;
-    }
-    if (toKind === 'dir') {
-      const info = dirs.get(event.toPath)!;
-      if (info.fileCount > 0) {
-        shadow({ kind: 'target-non-empty', target: event.toPath });
-        return;
-      }
-      /**
-       * Target dir is empty (possibly implicit-collapsed-to-explicit). Drop
-       * it so the source can take its place. Decrement ancestors — the
-       * empty target's fileCount is 0 so this is a no-op, but we keep the
-       * helper for symmetry with the file branch.
-       */
-      removeDirSubtree(dirs, event.toPath);
-    } else {
-      /**
-       * file-over-file overwrite: POSIX rename(2) replaces the target
-       * atomically. The source's ancestors will lose 1 (because the source
-       * file goes away), the target's ancestors keep their count (the slot
-       * stays occupied).
-       */
-      files.delete(event.toPath);
-      fileOrigins.delete(event.toPath);
-      decrementAncestors(dirs, event.toPath, 1);
-    }
-  }
+  if (files.has(event.toPath)) removeFile(files, dirs, fileOrigins, event.toPath);
+  if (dirs.has(event.toPath)) removeDir(files, dirs, fileOrigins, event.toPath);
 
   if (fromKind === 'file') {
     moveFile(files, dirs, fileOrigins, event.fromPath, event.toPath, event.renamedAt);
   } else {
     moveDir(files, dirs, fileOrigins, event.fromPath, event.toPath, event.renamedAt);
   }
+  entryHeads.set(event.fromPath, tiebreak);
+  entryHeads.set(event.toPath, tiebreak);
+}
+
+function removeFile(
+  files: Map<string, FileMetadata>,
+  dirs: Map<string, DirInfo>,
+  fileOrigins: Map<string, string>,
+  path: string,
+): void {
+  if (!files.delete(path)) return;
+  fileOrigins.delete(path);
+  decrementAncestors(dirs, path, 1);
+}
+
+function removeDir(
+  files: Map<string, FileMetadata>,
+  dirs: Map<string, DirInfo>,
+  fileOrigins: Map<string, string>,
+  path: string,
+): void {
+  let removedFileCount = 0;
+  for (const fpath of [...files.keys()]) {
+    if (isSelfOrDescendant(fpath, path)) {
+      files.delete(fpath);
+      fileOrigins.delete(fpath);
+      removedFileCount += 1;
+    }
+  }
+  for (const dpath of [...dirs.keys()]) {
+    if (isSelfOrDescendant(dpath, path)) dirs.delete(dpath);
+  }
+  if (removedFileCount > 0) decrementAncestors(dirs, path, removedFileCount);
 }
 
 function moveFile(
@@ -476,13 +456,5 @@ function moveDir(
   for (const ancestor of ancestorPaths(toPath)) {
     ensureImplicitDir(dirs, ancestor, renamedAt);
     dirs.get(ancestor)!.fileCount += movedFiles.length;
-  }
-}
-
-function removeDirSubtree(dirs: Map<string, DirInfo>, path: string): void {
-  for (const dpath of [...dirs.keys()]) {
-    if (isSelfOrDescendant(dpath, path)) {
-      dirs.delete(dpath);
-    }
   }
 }

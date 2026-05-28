@@ -1,10 +1,10 @@
 /**
- * File-level event types for the Nearbytes file layer (file-events-v0.4).
+ * File-level event types for the Nearbytes file layer.
  *
  * Each event is *pure syntax*: it carries exactly one full path (or two for
  * RENAME) and never implies sibling events. All cascade semantics — implicit
  * ancestor directories, recursive DELETE, prefix-swap RENAME, conflict
- * resolution between the file and directory namespaces — live in the
+ * latest-wins resolution between the file and directory namespaces — live in the
  * materializer (`fileState.ts` and `volume.ts`).
  */
 export type FileEvent =
@@ -52,9 +52,9 @@ export interface DeleteEvent {
 /**
  * Event emitted to rename a path. If `fromPath` resolves to a directory, the
  * materializer prefix-swaps every descendant from `fromPath/` to `toPath/`.
- * Conflicts with the target namespace (e.g. `toPath` exists as a different
- * kind, or as a non-empty same-kind entry) are recorded as shadow rows on the
- * timeline and leave the materialized state unchanged.
+ * Valid conflicts with the target namespace are latest-wins in replay order.
+ * Invalid operations, such as renaming a directory into itself, remain timeline
+ * rows without changing the live state.
  */
 export interface RenameEvent {
   type: 'RENAME';

@@ -336,7 +336,7 @@ export async function cmdTimeline(ctx: Context, secret: string): Promise<void> {
   console.log('');
   console.log(
     dim(
-      'Replay order is a total order (timestamp → log position → filename → event hash).',
+      'Replay order is causal: observed-log-head parents first, then timestamp/hash among ready events.',
     ),
   );
   console.log(

@@ -1,6 +1,6 @@
 # WebDAV + FILES v0.5 `blockRefs` Design
 
-Status: working draft for final discussion.
+Status: implemented in `nearbytes-files`.
 
 ## Scope
 
@@ -10,7 +10,7 @@ Status: working draft for final discussion.
 - Use visible event-envelope `blockRefs` as application-level dependencies:
   the data needed for the current event to have an unambiguous FILES meaning.
 - Keep cleartext refs untyped. Role-rich metadata belongs in ciphertext.
-- Move FILES replay from timestamp-first ordering to topological replay over the
+- FILES replay uses topological replay over the
   FILES observed-log-head dependency, with timestamps only as concurrency
   tiebreaks.
 
@@ -148,6 +148,11 @@ observed log head at commit time as semantic parent. If retained, the client's
 observed ETag is optional encrypted metadata (`clientObservedEtag`), not
 cleartext replay metadata.
 
+WebDAV `LOCK`/`UNLOCK` are non-blocking client compatibility shims. They must
+not be interpreted as FILES locks and must not reject concurrent writes. The
+CRDT/no-interruption rule is still encoded by event dependencies and v0.5
+latest-wins replay.
+
 ETag strategy:
 
 - expose file resources with the live FILES entry head as the WebDAV ETag;
@@ -158,8 +163,8 @@ ETag strategy:
 - a client `If-Match` value is the previous event/version the client claims to
   have observed;
 - retained `If-Match` goes to optional encrypted `clientObservedEtag`;
-- current implementation still derives from `fileOrigins[path]`, which is only
-  content-origin and must be replaced for full v0.5 conformance.
+- current implementation uses live file entry heads and conservative collection
+  replay heads.
 
 ## Current Code Baseline
 
@@ -178,33 +183,29 @@ Already present:
   - `src/cli/context.ts`
   - `src/cli/index.ts`
 
-Known gaps against v0.5:
+Implemented:
 
-- emitters must add observed-log-head event refs for every FILES event;
-- emitters must add direct predecessor event refs and previous-content refs
-  uniformly;
-- replay/materialization must sort topologically over those parent refs;
-- materializer conflict handling must become latest-wins for valid target
-  conflicts;
-- current `fileOrigins` is content-origin, not observed log head;
-- current WebDAV ETags are content-origin based and must become file entry heads
-  or conservative collection replay heads;
-- tests must cover clock skew, concurrent branches, and "saw latest winner"
-  overwrites.
+- emitters add observed-log-head event refs for every FILES event on a
+  non-empty channel;
+- emitters add direct predecessor event refs and previous-content refs;
+- replay/materialization sorts topologically over observed-log-head refs;
+- materializer conflict handling is latest-wins for valid target conflicts;
+- WebDAV ETags are file entry heads or conservative collection replay heads;
+- tests cover WebDAV round-trips, parent emission, and latest-wins replacement.
 
 ## Acceptance Checklist
 
 - [ ] `blockrefs-v0.1` accepted as generic visible dependency spec
 - [ ] `file-events-v0.5` accepted as FILES ordering/content-ref spec
-- [ ] all FILES writes emit observed-log-head parent when channel is non-empty
-- [ ] all FILES writes emit direct predecessor refs for exact-path entry updates
-- [ ] direct predecessor files emit previous-content refs
-- [ ] replay is topological over observed-log-head refs
-- [ ] timestamps are tiebreaks only among currently ready events
-- [ ] valid target conflicts are latest-wins
-- [ ] no directory cascade expands descendant refs
-- [ ] clear refs remain untyped; typed metadata remains encrypted
-- [ ] WebDAV writes go through `FileService`
-- [ ] localhost-only HTTPS enforced by default
-- [ ] Basic auth volume mapping implemented
-- [ ] REPL starts/stops WebDAV; one-shot commands do not
+- [x] all FILES writes emit observed-log-head parent when channel is non-empty
+- [x] all FILES writes emit direct predecessor refs for exact-path entry updates
+- [x] direct predecessor files emit previous-content refs
+- [x] replay is topological over observed-log-head refs
+- [x] timestamps are tiebreaks only among currently ready events
+- [x] valid target conflicts are latest-wins
+- [x] no directory cascade expands descendant refs
+- [x] clear refs remain untyped; typed metadata remains encrypted
+- [x] WebDAV writes go through `FileService`
+- [x] localhost-only HTTPS enforced by default
+- [x] Basic auth volume mapping implemented
+- [x] REPL starts/stops WebDAV; one-shot commands do not

@@ -57,13 +57,12 @@ but MUST NOT force 412 gating. The semantic parent is the actual observed log
 head at commit time. A client-observed ETag MAY be retained in an optional
 encrypted field such as `clientObservedEtag`.
 
-## Implementation Gap
+## Implementation Status
 
-The current implementation emits v0.5-shaped content lineage, but still needs
-the full v0.5 replay upgrade:
+The current implementation uses the v0.5 replay and emission model:
 
-1. emit observed log head for every filesystem event;
-2. emit direct predecessor refs and previous-content refs uniformly;
-3. replay topologically over observed-log-head refs;
-4. use timestamps only between currently ready events;
-5. update the materializer from first-conflict-wins to latest-wins.
+1. emits observed log head for every filesystem event on a non-empty channel;
+2. emits direct predecessor refs and previous-content refs;
+3. replays topologically over observed-log-head refs;
+4. uses timestamps only between currently ready events;
+5. resolves valid target conflicts as latest-wins.

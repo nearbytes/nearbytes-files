@@ -4,8 +4,8 @@ import { materialize, type CanonicalEntry } from './fileMaterializer.js';
 /**
  * Reconstructs the current file state by replaying an append-only event log.
  *
- * The materializer enforces the file-events-v0.4 cascade semantics — implicit
- * directories, recursive DELETE, prefix-swap RENAME, conflict shadowing —
+ * The materializer enforces FILES cascade semantics — implicit directories,
+ * recursive DELETE, prefix-swap RENAME, latest-wins target replacement —
  * shared with `volume.ts`'s live replay path.
  */
 export function reconstructFileState(events: FileEvent[]): Map<string, FileMetadata> {

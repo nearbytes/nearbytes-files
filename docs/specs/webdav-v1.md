@@ -34,6 +34,11 @@ Clear `blockRefs` include direct predecessor event refs and previous-content
 blocks for exact-path file overwrites/deletes/moves. This is enough for
 previous-version and conflict tooling without expanding directory cascades.
 
+WebDAV `LOCK`/`UNLOCK` are compatibility acknowledgements for clients such as
+Finder. They MUST NOT become blocking application-level locks. Writes still
+commit as FILES events whose causal order is represented by observed-log-head
+dependencies; conflicts are resolved by v0.5 replay.
+
 ## Lifecycle
 
 Started with **`nbf` REPL / default shell** (not one-shot CLI). Stopped on REPL exit (`flushAndStop`). Shares `dataDir` with `nbsync` like the CLI.

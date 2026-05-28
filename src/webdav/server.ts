@@ -2,7 +2,7 @@ import https from 'node:https';
 import type { FileService } from '../fileService.js';
 import type { CryptoOperations } from 'nearbytes-crypto';
 import type { Log } from 'nearbytes-log';
-import { loadMaterializedFileSystem } from '../fileEmit.js';
+import { loadFileReplayContext } from '../fileEmit.js';
 import { createWebDavHandler } from './handler.js';
 import { loadOrCreateLocalTls } from './tls.js';
 
@@ -26,11 +26,13 @@ export async function startWebDavServer(options: WebDavServerOptions): Promise<W
   const tls = await loadOrCreateLocalTls();
 
   const etagForPath = async (secret: string, path: string): Promise<string | undefined> => {
-    const fs = await loadMaterializedFileSystem(secret, options.crypto, options.log);
-    return fs.fileOrigins.get(path);
+    const { fs, observedHead } = await loadFileReplayContext(secret, options.crypto, options.log);
+    return fs.fileOrigins.get(path) ?? observedHead;
   };
 
-  const handler = createWebDavHandler({ fileService: options.fileService, etagForPath });
+  const snapshotForSecret = async (secret: string) => loadFileReplayContext(secret, options.crypto, options.log);
+
+  const handler = createWebDavHandler({ fileService: options.fileService, etagForPath, snapshotForSecret });
   const server = https.createServer({ cert: tls.cert, key: tls.key }, (req, res) => {
     void handler(req, res);
   });

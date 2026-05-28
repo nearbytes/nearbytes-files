@@ -104,6 +104,37 @@ Tab completes commands, secrets, file names, and paths (Windows paths with `\` o
 
 After `volume open`, file commands use the active volume (no `-s` needed). `timeline` prints the volume’s event audit log (creates, deletes, renames, …) in replay order. Type `help` in the REPL for the full command list.
 
+### WebDAV
+
+Starting the REPL also starts the local HTTPS WebDAV server:
+
+```sh
+yarn repl
+```
+
+The REPL prints the mount base URL, normally:
+
+```text
+https://127.0.0.1:9843/<volume>/
+```
+
+To open a volume over WebDAV:
+
+1. Use the volume name as the URL path and username.
+2. Use the secret part as the password.
+3. The Nearbytes volume secret is `username:password`.
+
+Example:
+
+```text
+URL:      https://127.0.0.1:9843/myvol/
+Username: myvol
+Password: password
+Secret:   myvol:password
+```
+
+The server binds to `127.0.0.1` and uses a local self-signed certificate. On macOS Finder choose **Go → Connect to Server…** and enter the URL above. On clients that require a trusted certificate, accept/trust the generated local certificate for this machine.
+
 ### One-shot examples
 
 ```sh

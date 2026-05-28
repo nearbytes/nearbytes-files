@@ -29,6 +29,7 @@ import {
 import { secretVolumePrefix } from './volumeSessionStore.js';
 import { findEventIndex, formatTimelineGotoIndexError } from '../fileEmit.js';
 import { bumpWebDavView } from '../webdav/access.js';
+import { saveWebDavView } from './webdavViewState.js';
 import {
   resolveRemotePath,
   joinRemotePaths,
@@ -388,36 +389,64 @@ export async function cmdTimelineGoto(ctx: Context, selector: string): Promise<v
   const events =
     ctx.lastTimelineEvents ?? (await ctx.fileService.getTimeline(secret));
 
-  let idx = findEventIndex(replay.orderedEntries, selector);
-  if (idx === -2) {
-    throw new Error(formatTimelineGotoIndexError(selector, replay.orderedEntries, -2));
-  }
-  if (idx < 0) {
-    const instant = parseTimelineInstant(selector);
-    if (instant !== null) {
-      idx = events.findIndex((e) => e.timestamp > instant);
-      if (idx < 0) {
-        throw new Error(`No event after ${selector}`);
-      }
-    } else if (/^\d+$/.test(selector.trim().replace(/^#/, ''))) {
-      throw new Error(formatTimelineGotoIndexError(selector, replay.orderedEntries, -1));
-    } else {
+  const trimmed = selector.trim().replace(/^#/, '');
+  let idx: number;
+  if (/^\d+$/.test(trimmed)) {
+    const n = Number.parseInt(trimmed, 10);
+    if (n < 1 || n > events.length) {
       throw new Error(
-        formatTimelineGotoIndexError(selector, replay.orderedEntries, -1) ||
-          `Unknown timeline selector: ${selector}`,
+        `Event #${n} is out of range (timeline table has ${events.length} row(s), use 1–${events.length})`,
       );
+    }
+    idx = n - 1;
+  } else {
+    idx = findEventIndex(replay.orderedEntries, selector);
+    if (idx === -2) {
+      throw new Error(formatTimelineGotoIndexError(selector, replay.orderedEntries, -2));
+    }
+    if (idx < 0) {
+      const instant = parseTimelineInstant(selector);
+      if (instant !== null) {
+        idx = events.findIndex((e) => e.timestamp > instant);
+        if (idx < 0) {
+          throw new Error(`No event after ${selector}`);
+        }
+      } else {
+        throw new Error(
+          formatTimelineGotoIndexError(selector, replay.orderedEntries, -1) ||
+            `Unknown timeline selector: ${selector}`,
+        );
+      }
     }
   }
 
-  const hash = replay.orderedEntries[idx]!.eventHash;
+  const hash = events[idx]?.eventHash ?? replay.orderedEntries[idx]!.eventHash;
+  const replayIdx = replay.orderedEntries.findIndex((e) => e.eventHash === hash);
+  if (replayIdx < 0) {
+    throw new Error(`Event ${hash} is not in the FILES replay log`);
+  }
   ctx.timelineCursorHash = hash;
+  await saveWebDavView(ctx.config.dataDir, {
+    volume: ctx.volumeSessionActive,
+    cursorHash: hash,
+  });
   bumpWebDavView(ctx);
-  const atHead = idx === replay.orderedEntries.length - 1;
+  const atHead = replayIdx === replay.orderedEntries.length - 1;
   if (atHead) {
     ctx.timelineCursorHash = null;
+    await saveWebDavView(ctx.config.dataDir, {
+      volume: ctx.volumeSessionActive,
+      cursorHash: null,
+    });
     console.log(green('✓ Timeline cursor at live head'));
   } else {
-    console.log(green(`✓ Timeline cursor at event #${idx + 1} (read-only view)`));
+    const displayNum = idx + 1;
+    const fileCount = (await ctx.fileService.getReplayContext(secret, { throughEventHash: hash }))
+      .fs.files.size;
+    console.log(
+      green(`✓ Timeline cursor at event #${displayNum} (read-only view)`) +
+        dim(` — ${fileCount} file(s) visible on WebDAV`),
+    );
     console.log(dim(`  ${hash}`));
     console.log(
       dim('  WebDAV ETags updated — if Finder still shows the old tree, press ⌘R in that window'),
@@ -426,7 +455,7 @@ export async function cmdTimelineGoto(ctx: Context, selector: string): Promise<v
 }
 
 export async function cmdTimelineLive(ctx: Context): Promise<void> {
-  resetTimelineCursor(ctx);
+  await resetTimelineCursor(ctx);
   console.log(green('✓ Timeline cursor at live head'));
 }
 

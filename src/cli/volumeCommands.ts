@@ -9,6 +9,7 @@ import {
   type VolumeSessionFile,
 } from './volumeSessionStore.js';
 import { bumpWebDavView } from '../webdav/access.js';
+import { saveWebDavView } from './webdavViewState.js';
 
 function sessionFileFromContext(ctx: Context): VolumeSessionFile {
   return {
@@ -21,8 +22,14 @@ async function persistVolumeRegistry(ctx: Context): Promise<void> {
   await saveVolumeSession(ctx.config.dataDir, sessionFileFromContext(ctx));
 }
 
-export function resetTimelineCursor(ctx: Context): void {
+export async function resetTimelineCursor(ctx: Context): Promise<void> {
   ctx.timelineCursorHash = null;
+  if (ctx.volumeSessionActive !== null) {
+    await saveWebDavView(ctx.config.dataDir, {
+      volume: ctx.volumeSessionActive,
+      cursorHash: null,
+    });
+  }
   bumpWebDavView(ctx);
 }
 
@@ -70,7 +77,7 @@ export async function cmdVolumeUse(ctx: Context, name: string): Promise<void> {
   ctx.volumeSessionActive = trimmed;
   ctx.activeVolume = rv;
   if (switching) {
-    resetTimelineCursor(ctx);
+    await resetTimelineCursor(ctx);
     ctx.remoteCwd = '';
   }
   await persistVolumeRegistry(ctx);
@@ -95,7 +102,7 @@ export async function cmdVolumeForget(ctx: Context, name: string): Promise<void>
   if (ctx.volumeSessionActive === trimmed) {
     ctx.volumeSessionActive = null;
     ctx.activeVolume = null;
-    resetTimelineCursor(ctx);
+    await resetTimelineCursor(ctx);
     ctx.remoteCwd = '';
   }
   await persistVolumeRegistry(ctx);

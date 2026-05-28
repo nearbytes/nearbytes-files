@@ -1,7 +1,14 @@
+import { readFileSync } from 'node:fs';
 import type { Context } from '../cli/context.js';
 import { parseBasicAuth } from './auth.js';
 import { profileWebDavPassword } from '../cli/volumeSessionStore.js';
+import { webDavViewPath, type WebDavViewState } from '../cli/webdavViewState.js';
 import { debugEnabled } from '../debug.js';
+
+function cursorEpochToken(cursorHash: string | null): string {
+  if (cursorHash === null) return 'live';
+  return cursorHash.length <= 16 ? cursorHash : cursorHash.slice(0, 16);
+}
 
 export interface WebDavAccess {
   readonly authGeneration: number;
@@ -20,6 +27,23 @@ export interface WebDavAccess {
 
 export function bumpWebDavView(ctx: Context): void {
   ctx.webdavViewGeneration += 1;
+}
+
+/** Prefer on-disk view state (written by REPL) so tools can attach without IPC. */
+export function resolveTimelineCursor(ctx: Context, volumeName: string): string | undefined {
+  try {
+    const raw = readFileSync(webDavViewPath(ctx.config.dataDir), 'utf8');
+    const file = JSON.parse(raw) as WebDavViewState;
+    if (file.volume === volumeName) {
+      return file.cursorHash ?? undefined;
+    }
+  } catch {
+    // no file yet
+  }
+  if (ctx.volumeSessionActive === volumeName) {
+    return ctx.timelineCursorHash ?? undefined;
+  }
+  return undefined;
 }
 
 export function createWebDavAccess(ctx: Context): WebDavAccess {
@@ -69,14 +93,16 @@ export function createWebDavAccess(ctx: Context): WebDavAccess {
       if (activeName === null) return undefined;
       const activeSecret = ctx.volumeRegistry.get(activeName);
       if (activeSecret !== secret) return undefined;
-      return ctx.timelineCursorHash ?? undefined;
+      return resolveTimelineCursor(ctx, activeName);
     },
     isReadOnlySecret(secret) {
       return this.timelineCursorForSecret(secret) !== undefined;
     },
     getViewEpoch() {
       const vol = ctx.volumeSessionActive ?? '_';
-      const cursor = ctx.timelineCursorHash ?? 'live';
+      const hash =
+        vol === '_' ? (ctx.timelineCursorHash ?? null) : resolveTimelineCursor(ctx, vol) ?? null;
+      const cursor = cursorEpochToken(hash);
       return `${vol}@${cursor}:g${ctx.webdavViewGeneration}`;
     },
     bumpView() {

@@ -19,7 +19,20 @@ Wrong password: empty channel or decrypt failure; no cross-volume leakage.
 
 ## Operations
 
-Maps to `FileService` via `fileEmit` (causal `blockRefs` v0.5). `ETag` = quoted live superseded `CREATE_FILE` `eventHash` (after write, new event hash). `If-Match` never returns 412 (LWW); optional observed etag for future payload fields.
+Maps to `FileService` via `fileEmit` (FILES `blockRefs` v0.5). `ETag` SHOULD be
+a quoted FILES event hash: file resources use their live entry head, while
+collection resources use the current channel replay head unless a future
+implementation computes a narrower directory-listing head. This keeps implicit
+directories and listing changes covered without inventing non-event validators.
+A client `If-Match` value is therefore the previous event/version the client
+claims to have observed. Writes do not fail on `If-Match`: the server commits a
+new FILES event whose semantic parent is the actual observed log head at commit
+time. If the client validator is retained, it belongs in optional encrypted
+metadata such as `clientObservedEtag`, not in cleartext typed envelope fields.
+
+Clear `blockRefs` include direct predecessor event refs and previous-content
+blocks for exact-path file overwrites/deletes/moves. This is enough for
+previous-version and conflict tooling without expanding directory cascades.
 
 ## Lifecycle
 

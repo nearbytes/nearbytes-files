@@ -6,4 +6,5 @@ Canonical semantics live in `nearbytes-crypto` (`EventType`, inner payloads) and
 - Total order: `timestamp` → log `sequence` → `eventHash`.
 - `CREATE_FILE` envelope `blockRefs` contained **only** the new content block.
 
-See [file-events-v0.5](file-events-v0.5.md) for causal lineage in `blockRefs`.
+See [file-events-v0.5](file-events-v0.5.md) for semantic `blockRefs` and
+topological replay over the observed log head.

@@ -1,5 +1,9 @@
 /**
- * Single emit path for file-events-v0.5 causal `blockRefs`.
+ * Central emit path for FILES visible `blockRefs`.
+ *
+ * NOTE: this helper currently emits content lineage refs. Full FILES v0.5
+ * requires an observed-log-head event parent plus topological replay; see
+ * docs/specs/file-events-v0.5.md.
  */
 
 import type { KeyPair } from 'nearbytes-crypto';

@@ -12,11 +12,13 @@ import {
   type NearbytesConfig,
 } from 'nearbytes-skeleton';
 import { createSecret, bytesToHex } from 'nearbytes-crypto';
+import type { WebDavServer } from '../webdav/index.js';
 
 export interface Context {
   config: NearbytesConfig;
   readonly skeleton: NearbytesSkeleton;
   readonly fileService: FileService;
+  webdav: WebDavServer | null;
   activeVolume: ReactiveVolume | null;
   readonly volumes: Map<string, ReactiveVolume>;
   readonly watchers: Map<string, VolumeWatcher>;
@@ -33,22 +35,37 @@ export interface Context {
 /**
  * Creates a CLI context: filesystem log, file service, empty volume cache.
  */
-export async function createContext(config: NearbytesConfig): Promise<Context> {
+export async function createContext(
+  config: NearbytesConfig,
+  options?: { webdav?: boolean },
+): Promise<Context> {
   const skeleton = await createFilesystemSkeletonFromConfig(config);
   const fileService = createFileService({ log: skeleton.log, crypto: skeleton.crypto });
   const volumes = new Map<string, ReactiveVolume>();
   const watchers = new Map<string, VolumeWatcher>();
 
+  let webdav: WebDavServer | null = null;
+  if (options?.webdav === true) {
+    const { startWebDavServer } = await import('../webdav/index.js');
+    webdav = await startWebDavServer({
+      fileService,
+      crypto: skeleton.crypto,
+      log: skeleton.log,
+    });
+  }
+
   return {
     config,
     skeleton,
     fileService,
+    webdav,
     activeVolume: null,
     volumes,
     watchers,
     remoteCwd: '',
 
     async destroy(): Promise<void> {
+      if (webdav !== null) await webdav.close();
       for (const w of watchers.values()) w.close();
       watchers.clear();
       await skeleton.destroy();

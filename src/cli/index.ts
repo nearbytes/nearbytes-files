@@ -106,7 +106,10 @@ async function runRepl(): Promise<void> {
     debug: boolean;
   }>();
   const config = await readConfig(opts.config).catch(() => emptyConfig(opts.dataDir));
-  const ctx = await createContext({ ...config, dataDir: opts.dataDir ?? config.dataDir });
+  const ctx = await createContext({ ...config, dataDir: opts.dataDir ?? config.dataDir }, { webdav: true });
+  if (ctx.webdav !== null) {
+    console.error(`WebDAV: ${ctx.webdav.baseUrl}/<volume>/ (Basic user=<volume> password=<secret>)`);
+  }
   await startRepl(ctx, {
     autoMonitor: opts.monitor === true,
     debug: opts.debug === true || process.env['NEARBYTES_DEBUG'] === '1',

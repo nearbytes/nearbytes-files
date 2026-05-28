@@ -35,6 +35,10 @@
     "./chatCodec": {
       "import": "./dist/chatCodec.js",
       "types": "./dist/chatCodec.d.ts"
+    },
+    "./webdav": {
+      "import": "./dist/webdav/index.js",
+      "types": "./dist/webdav/index.d.ts"
     }
   },
   "scripts": {
@@ -53,10 +57,12 @@
     "commander": "^12.0.0",
     "nearbytes-crypto": "github:nearbytes/nearbytes-crypto#6859719510764702844882b8488b35ab31f20145",
     "nearbytes-log": "github:nearbytes/nearbytes-log#a7f7810c736ce6a6343467da61a3d8e8a049f8e0",
-    "nearbytes-skeleton": "github:nearbytes/nearbytes-skeleton#9b2f48cde2a60c754ade52b8a9203e199e033f84"
+    "nearbytes-skeleton": "github:nearbytes/nearbytes-skeleton#9b2f48cde2a60c754ade52b8a9203e199e033f84",
+    "selfsigned": "^5.5.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
+    "@types/selfsigned": "^2.1.0",
     "typescript": "^5.3.2"
   },
   "packageManager": "yarn@4.15.0"

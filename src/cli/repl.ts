@@ -726,7 +726,7 @@ export async function startRepl(ctx: Context, opts: StartReplOptions = {}): Prom
       const abortController = new AbortController();
       const onSigint = (): void => abortController.abort();
       process.once('SIGINT', onSigint);
-      void flushAndStop(ctx, { abortSignal: abortController.signal })
+      void flushAndStop(ctx, { abortSignal: abortController.signal, waitForPeer: false })
         .catch((err) => {
           const msg =
             err instanceof Error

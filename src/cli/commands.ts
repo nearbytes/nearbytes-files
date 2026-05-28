@@ -731,6 +731,12 @@ export interface FlushOptions {
   readonly maxMs?: number;
   /** Cancellation: set by ^C to abort the wait early and exit immediately. */
   readonly abortSignal?: AbortSignal;
+  /**
+   * When false (REPL `bye`), exit once inflight is 0 for the quiet window even if
+   * no peer connected. When true (default, one-shot CLI), keep searching for peers
+   * up to `maxMs` so WAN first-connect can complete.
+   */
+  readonly waitForPeer?: boolean;
 }
 
 /**
@@ -775,6 +781,7 @@ export async function flushAndStop(ctx: Context, opts: FlushOptions = {}): Promi
    * giving a longer default avoids false "looks synced but actually exited
    * before first data transfer" outcomes in one-shot commands.
    */
+  const waitForPeer = opts.waitForPeer !== false;
   const defaultMaxMs = ctx.config.friends.length > 0 ? 60000 : 15000;
   const maxMs = opts.maxMs ?? defaultMaxMs;
   const QUIET_MS = 1000;
@@ -850,13 +857,16 @@ export async function flushAndStop(ctx: Context, opts: FlushOptions = {}): Promi
         `out ${bold(String(snap.inflightOutbound))}` +
         (busy === 0
           ? dim(
-              `  ${everSawPeer ? 'quiet' : 'waiting for peer'} ` +
-                `${(sinceQuiet / 1000).toFixed(1)}s / ${(QUIET_MS / 1000).toFixed(1)}s`,
+              everSawPeer
+                ? `  quiet ${(sinceQuiet / 1000).toFixed(1)}s / ${(QUIET_MS / 1000).toFixed(1)}s`
+                : waitForPeer
+                  ? `  no peer yet ${(elapsed / 1000).toFixed(1)}s / ${(maxMs / 1000).toFixed(0)}s max`
+                  : `  local quiet ${(sinceQuiet / 1000).toFixed(1)}s / ${(QUIET_MS / 1000).toFixed(1)}s`,
             )
           : ''),
     );
 
-    if (everSawPeer && busy === 0 && sinceQuiet >= QUIET_MS) break;
+    if (busy === 0 && sinceQuiet >= QUIET_MS && (everSawPeer || !waitForPeer)) break;
     if (elapsed >= maxMs) break;
 
     await sleep(POLL_MS);

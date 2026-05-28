@@ -5,6 +5,7 @@ import type { FileService } from '../fileService.js';
 import type { MaterializedFileSystem } from '../fileMaterializer.js';
 import { normalizeVolumePath } from '../pathUtils.js';
 import { credentialsFromRequest } from './auth.js';
+import { debugEnabled } from '../debug.js';
 import { lockDiscovery, multistatus, responseHref } from './xml.js';
 
 export interface WebDavHandlerDeps {
@@ -12,7 +13,19 @@ export interface WebDavHandlerDeps {
   readonly etagForPath: (secret: string, path: string) => Promise<string | undefined>;
   readonly snapshotForSecret: (
     secret: string,
-  ) => Promise<{ readonly fs: MaterializedFileSystem; readonly observedHead?: string }>;
+  ) => Promise<{
+    readonly fs: MaterializedFileSystem;
+    readonly observedHead?: string;
+    readonly liveEncryptedKeys: ReadonlyMap<string, Uint8Array>;
+  }>;
+  readonly readFileFromSnapshot: (
+    secret: string,
+    path: string,
+    snapshot: {
+      readonly fs: MaterializedFileSystem;
+      readonly liveEncryptedKeys: ReadonlyMap<string, Uint8Array>;
+    },
+  ) => Promise<Buffer>;
 }
 
 function send(
@@ -47,12 +60,21 @@ function parseUrl(req: IncomingMessage): { volume: string; inner: string } | nul
   return { volume, inner };
 }
 
-function webdavDebugEnabled(): boolean {
-  return process.env['NEARBYTES_WEBDAV_DEBUG'] === '1';
+function debugStage(
+  req: IncomingMessage,
+  inner: string,
+  stage: string,
+  started: number,
+): void {
+  if (!debugEnabled('timing')) return;
+  const elapsed = Math.round((performance.now() - started) * 10) / 10;
+  console.error(
+    `[nearbytes-webdav][timing] ${req.method ?? 'UNKNOWN'} path=${JSON.stringify(inner)} stage=${stage} ${elapsed}ms`,
+  );
 }
 
 function debugRequest(req: IncomingMessage, inner: string): void {
-  if (!webdavDebugEnabled()) return;
+  if (!debugEnabled('webdav')) return;
   const depth = Array.isArray(req.headers.depth) ? req.headers.depth[0] : req.headers.depth;
   const destination = Array.isArray(req.headers.destination)
     ? req.headers.destination[0]
@@ -65,7 +87,7 @@ function debugRequest(req: IncomingMessage, inner: string): void {
 }
 
 function debugResponse(req: IncomingMessage, res: ServerResponse, inner: string): void {
-  if (!webdavDebugEnabled()) return;
+  if (!debugEnabled('webdav')) return;
   const started = performance.now();
   res.once('finish', () => {
     const elapsed = Math.round((performance.now() - started) * 10) / 10;
@@ -87,16 +109,6 @@ function isBrowserProbe(req: IncomingMessage): boolean {
 function hrefFor(volume: string, inner: string): string {
   const encoded = inner.length > 0 ? `/${inner.split('/').map(encodeURIComponent).join('/')}` : '';
   return `/${encodeURIComponent(volume)}${encoded}`;
-}
-
-function basename(path: string): string {
-  const index = path.lastIndexOf('/');
-  return index < 0 ? path : path.slice(index + 1);
-}
-
-function isMacOsMetadataPath(path: string): boolean {
-  const name = basename(path);
-  return name === '.DS_Store' || name.startsWith('._');
 }
 
 async function readBody(req: IncomingMessage): Promise<Buffer> {
@@ -183,18 +195,14 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
       if (req.method === 'PROPFIND') {
         const depthHeader = Array.isArray(req.headers.depth) ? req.headers.depth[0] : req.headers.depth;
         const depth = depthHeader ?? 'infinity';
-        if (inner !== '' && isMacOsMetadataPath(inner)) {
-          send(res, 207, multistatus(responseHref(hrefFor(parsed.volume, inner), {
-            isCollection: false,
-            etag: 'nearbytes-macos-metadata',
-            length: 0,
-          })), { 'Content-Type': 'application/xml; charset=utf-8' });
-          return;
-        }
-
+        const snapshotStarted = performance.now();
         const snapshot = await deps.snapshotForSecret(secret);
+        debugStage(req, inner, 'snapshotForSecret', snapshotStarted);
+
+        const sortStarted = performance.now();
         const files = [...snapshot.fs.files.values()].sort((a, b) => a.path.localeCompare(b.path));
         const dirs = [...snapshot.fs.directories.values()].sort((a, b) => a.path.localeCompare(b.path));
+        debugStage(req, inner, 'snapshot-sort', sortStarted);
         const parts: string[] = [];
         const baseHref = hrefFor(parsed.volume, inner);
         const baseEtag =
@@ -251,26 +259,9 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
       }
 
       if (req.method === 'GET' || req.method === 'HEAD') {
-        if (isMacOsMetadataPath(inner)) {
-          const headers = {
-            'Content-Type': 'application/octet-stream',
-            ETag: '"nearbytes-macos-metadata"',
-          };
-          if (req.method === 'HEAD') {
-            send(res, 200, undefined, headers);
-            return;
-          }
-          res.writeHead(200, {
-            'Cache-Control': 'no-store',
-            Pragma: 'no-cache',
-            ...headers,
-            'Content-Length': '0',
-          });
-          res.end();
-          return;
-        }
-
+        const snapshotStarted = performance.now();
         const snapshot = await deps.snapshotForSecret(secret);
+        debugStage(req, inner, 'snapshotForSecret', snapshotStarted);
         const meta = snapshot.fs.files.get(inner);
         if (meta === undefined) {
           send(res, 404);
@@ -282,10 +273,13 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
         };
         if (etag !== undefined) headers.ETag = `"${etag}"`;
         if (req.method === 'HEAD') {
+          if (meta.size > 0) headers['Content-Length'] = String(meta.size);
           send(res, 200, undefined, headers);
           return;
         }
-        const data = await fileService.getFile(secret, meta.blobHash);
+        const getFileStarted = performance.now();
+        const data = await deps.readFileFromSnapshot(secret, inner, snapshot);
+        debugStage(req, inner, 'readFileFromSnapshot', getFileStarted);
         res.writeHead(200, {
           'Cache-Control': 'no-store',
           Pragma: 'no-cache',
@@ -297,12 +291,12 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
       }
 
       if (req.method === 'PUT') {
+        const bodyStarted = performance.now();
         const body = await readBody(req);
-        if (isMacOsMetadataPath(inner)) {
-          send(res, 201, undefined, { ETag: '"nearbytes-macos-metadata"' });
-          return;
-        }
+        debugStage(req, inner, 'readBody', bodyStarted);
+        const putStarted = performance.now();
         await fileService.addFile(secret, inner, body);
+        debugStage(req, inner, 'fileService.addFile', putStarted);
         const etag = await etagForPath(secret, inner);
         const putHeaders: Record<string, string> = {};
         if (etag !== undefined) putHeaders.ETag = `"${etag}"`;
@@ -311,10 +305,6 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
       }
 
       if (req.method === 'DELETE') {
-        if (isMacOsMetadataPath(inner)) {
-          send(res, 204);
-          return;
-        }
         await fileService.delete(secret, inner);
         send(res, 204);
         return;
@@ -344,10 +334,6 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
         }
         const toPath =
           destSegs.length > 1 ? normalizeVolumePath(destSegs.slice(1).join('/')) : '';
-        if (isMacOsMetadataPath(inner) || isMacOsMetadataPath(toPath)) {
-          send(res, 201);
-          return;
-        }
         await fileService.rename(secret, inner, toPath);
         send(res, 201);
         return;

@@ -75,7 +75,7 @@ export async function storeData(
   };
 
   const { fs, observedHead } = await loadFileReplayContext(secret as string, crypto, channelStorage);
-  const eventHash = await emitFileEvent(
+  const entry = await emitFileEvent(
     crypto,
     keyPair,
     channelStorage,
@@ -85,7 +85,7 @@ export async function storeData(
     [dataHash],
   );
 
-  return { eventHash, dataHash };
+  return { eventHash: entry.eventHash, dataHash };
 }
 
 /**
@@ -191,7 +191,7 @@ export async function storeDataDeduplicated(
   };
 
   const { fs, observedHead } = await loadFileReplayContext(secret as string, crypto, channelStorage);
-  const eventHash = await emitFileEvent(
+  const entry = await emitFileEvent(
     crypto,
     keyPair,
     channelStorage,
@@ -201,7 +201,7 @@ export async function storeDataDeduplicated(
     [dataHash],
   );
 
-  return { eventHash, dataHash, wasDeduplicated: dataExists };
+  return { eventHash: entry.eventHash, dataHash, wasDeduplicated: dataExists };
 }
 
 /**
@@ -224,7 +224,7 @@ export async function deletePath(
   };
 
   const { fs, observedHead } = await loadFileReplayContext(secret as string, crypto, channelStorage);
-  const eventHash = await emitFileEvent(
+  const entry = await emitFileEvent(
     crypto,
     keyPair,
     channelStorage,
@@ -234,5 +234,5 @@ export async function deletePath(
     [],
   );
 
-  return { eventHash };
+  return { eventHash: entry.eventHash };
 }

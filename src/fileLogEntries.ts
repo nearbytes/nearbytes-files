@@ -3,7 +3,11 @@ import type { EventLogEntry } from 'nearbytes-log';
 import type { CanonicalEntry, CanonicalEvent } from './fileMaterializer.js';
 
 export function toCanonicalEntries(entries: EventLogEntry[]): CanonicalEntry[] {
-  return orderEventLogEntries(entries).map((entry) => ({
+  return toCanonicalEntriesFromOrdered(orderEventLogEntries(entries));
+}
+
+export function toCanonicalEntriesFromOrdered(entries: readonly EventLogEntry[]): CanonicalEntry[] {
+  return entries.map((entry) => ({
     tiebreak: entry.eventHash,
     event: toCanonicalEvent(entry),
   }));
@@ -59,7 +63,11 @@ export function orderEventLogEntries(entries: readonly EventLogEntry[]): EventLo
 }
 
 export function observedLogHead(entries: readonly EventLogEntry[]): string | undefined {
-  const ordered = orderEventLogEntries(entries);
+  return observedLogHeadFromOrdered(orderEventLogEntries(entries));
+}
+
+export function observedLogHeadFromOrdered(entries: readonly EventLogEntry[]): string | undefined {
+  const ordered = entries;
   for (let i = ordered.length - 1; i >= 0; i -= 1) {
     const entry = ordered[i]!;
     if (isFileEventEntry(entry)) return entry.eventHash;

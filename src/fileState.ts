@@ -1,5 +1,6 @@
 import type { FileEvent, FileMetadata } from './fileEvents.js';
-import { materialize, type CanonicalEntry } from './fileMaterializer.js';
+import type { CanonicalEntry } from './fileMaterializer.js';
+import { runMaterialization } from './materialization.js';
 
 /**
  * Reconstructs the current file state by replaying an append-only event log.
@@ -22,7 +23,7 @@ export function reconstructFileState(events: FileEvent[]): Map<string, FileMetad
     event: toCanonical(event),
   }));
 
-  return new Map(materialize(entries).files);
+  return new Map(runMaterialization(entries).files);
 }
 
 function toCanonical(event: FileEvent): CanonicalEntry['event'] {

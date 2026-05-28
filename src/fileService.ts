@@ -39,18 +39,21 @@ import {
 } from './fileReferenceCodec.js';
 import { dedupeOrderedFilenames, resolveImportedFilename } from './fileCommands.js';
 import {
-  materialize,
+  type MaterializedFileSystem,
   type MaterializedShadow,
 } from './fileMaterializer.js';
 import { observedLogHead, orderEventLogEntries, toCanonicalEntries } from './fileLogEntries.js';
 import {
   emitFileEvent,
+  extendFileReplayContext,
   type CausalLineage,
   loadFileReplayContext,
   lineagesForRename,
   lineageAtPath,
 } from './fileEmit.js';
+import { rememberBlobPlaintextSize } from './fileBlobSizes.js';
 import { normalizeVolumePath } from './pathUtils.js';
+import { runMaterialization } from './materialization.js';
 
 export interface SnapshotSummary {
   generatedAt: number;
@@ -217,6 +220,13 @@ export interface FileService {
    * Use `listFiles` to look up the `blobHash` for a path.
    */
   getFile(secret: string, blobHash: string): Promise<Buffer>;
+  getFileByPath(secret: string, path: string): Promise<Buffer>;
+  getReplayContext(
+    secret: string,
+    opts?: { readonly enrichSizes?: boolean },
+  ): Promise<import('./fileEmit.js').FileReplayContext>;
+  /** Drop in-memory replay; next read reloads from storage (e.g. after external sync). */
+  markReplayStale(secret: string): void;
 
   computeSnapshot(secret: string): Promise<SnapshotSummary>;
   getTimeline(secret: string): Promise<TimelineEvent[]>;
@@ -280,41 +290,134 @@ interface StoredTimelineRow {
 export function createFileService(dependencies: FileServiceDependencies): FileService {
   const channelStorage = dependencies.log;
   const now = dependencies.now ?? (() => Date.now());
+  type ReplayState = {
+    context?: import('./fileEmit.js').FileReplayContext;
+    pending?: Promise<import('./fileEmit.js').FileReplayContext>;
+    stale: boolean;
+  };
+  const replayCache = new Map<string, ReplayState>();
+
+  const getReplayContext = async (
+    secret: string,
+    opts?: { readonly enrichSizes?: boolean },
+  ): Promise<import('./fileEmit.js').FileReplayContext> => {
+    const normalizedSecret = normalizeSecret(secret) as unknown as string;
+    const state = replayCache.get(normalizedSecret);
+    if (state !== undefined) {
+      if (!state.stale && state.context !== undefined) return state.context;
+      if (state.pending !== undefined) return state.pending;
+    }
+    const seed = state?.stale ? state.context : undefined;
+    const pending = loadFileReplayContext(normalizedSecret, dependencies.crypto, channelStorage, {
+      seed,
+      enrichSizes: opts?.enrichSizes === true,
+    }).then((context) => {
+      replayCache.set(normalizedSecret, { context, stale: false });
+      return context;
+    });
+    replayCache.set(normalizedSecret, { context: state?.context, pending, stale: false });
+    return pending;
+  };
+
+  const markReplayStale = (secret: string): void => {
+    const normalizedSecret = normalizeSecret(secret) as unknown as string;
+    const state = replayCache.get(normalizedSecret);
+    if (state === undefined) return;
+    replayCache.set(normalizedSecret, { ...state, stale: true });
+  };
+
+  const commitReplayEntry = (
+    secret: string,
+    entry: import('nearbytes-log').EventLogEntry,
+  ): void => {
+    const normalizedSecret = normalizeSecret(secret) as unknown as string;
+    const state = replayCache.get(normalizedSecret);
+    if (state?.context === undefined) {
+      if (state !== undefined) replayCache.set(normalizedSecret, { ...state, stale: true });
+      return;
+    }
+    replayCache.set(normalizedSecret, {
+      context: extendFileReplayContext(state.context, [entry]),
+      stale: false,
+    });
+  };
 
   return {
     addFile: async (secret, path, data, opts) =>
-      addFileWithDeps(secret, path, data, opts, dependencies.crypto, channelStorage, now),
+      addFileWithDeps(
+        secret,
+        path,
+        data,
+        opts,
+        dependencies.crypto,
+        channelStorage,
+        now,
+        getReplayContext,
+        commitReplayEntry,
+      ),
     mkdir: async (secret, path) =>
-      mkdirWithDeps(secret, path, dependencies.crypto, channelStorage, now),
+      mkdirWithDeps(
+        secret,
+        path,
+        dependencies.crypto,
+        channelStorage,
+        now,
+        getReplayContext,
+        commitReplayEntry,
+      ),
     delete: async (secret, path) =>
-      deletePathWithDeps(secret, path, dependencies.crypto, channelStorage, now),
+      deletePathWithDeps(
+        secret,
+        path,
+        dependencies.crypto,
+        channelStorage,
+        now,
+        getReplayContext,
+        commitReplayEntry,
+      ),
     rename: async (secret, fromPath, toPath) =>
-      renameWithDeps(secret, fromPath, toPath, dependencies.crypto, channelStorage, now),
+      renameWithDeps(
+        secret,
+        fromPath,
+        toPath,
+        dependencies.crypto,
+        channelStorage,
+        now,
+        getReplayContext,
+        commitReplayEntry,
+      ),
     listFiles: async (secret) =>
-      listFilesWithDeps(secret, dependencies.crypto, channelStorage),
+      listFilesWithDeps(secret, getReplayContext),
     listDirectories: async (secret) =>
-      listDirectoriesWithDeps(secret, dependencies.crypto, channelStorage),
+      listDirectoriesWithDeps(secret, getReplayContext),
     getFile: async (secret, blobHash) =>
-      getFileWithDeps(secret, blobHash, dependencies.crypto, channelStorage),
+      getFileWithDeps(secret, blobHash, dependencies.crypto, channelStorage, getReplayContext),
+    getFileByPath: async (secret, path) =>
+      getFileByPathWithDeps(secret, path, dependencies.crypto, channelStorage, getReplayContext),
+    getReplayContext: async (secret, opts) => getReplayContext(secret, opts),
+    markReplayStale: (secret) => markReplayStale(secret),
     computeSnapshot: async (secret) =>
-      computeSnapshotWithDeps(secret, dependencies.crypto, channelStorage, now),
+      computeSnapshotWithDeps(secret, now, getReplayContext),
     getTimeline: async (secret) =>
-      getTimelineWithDeps(secret, dependencies.crypto, channelStorage),
+      getTimelineWithDeps(secret, getReplayContext),
     getTimelineDelta: async (secret, afterEventHash) =>
-      getTimelineDeltaWithDeps(secret, afterEventHash, dependencies.crypto, channelStorage),
+      getTimelineDeltaWithDeps(secret, afterEventHash, getReplayContext),
     getEvent: async (secret, eventHash) =>
       getEventWithDeps(secret, eventHash, dependencies.crypto, channelStorage),
     exportSourceReferences: async (secret, paths) =>
       exportSourceReferencesWithDeps(secret, paths, dependencies.crypto, channelStorage, now),
-    importSourceReferences: async (destinationSecret, bundle, sourceSecret) =>
-      importSourceReferencesWithDeps(
+    importSourceReferences: async (destinationSecret, bundle, sourceSecret) => {
+      const result = await importSourceReferencesWithDeps(
         destinationSecret,
         bundle,
         sourceSecret,
         dependencies.crypto,
         channelStorage,
         now,
-      ),
+      );
+      markReplayStale(normalizeSecret(destinationSecret) as unknown as string);
+      return result;
+    },
     exportRecipientReferences: async (secret, paths, recipientVolumeId) =>
       exportRecipientReferencesWithDeps(
         secret,
@@ -324,8 +427,17 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
         channelStorage,
         now,
       ),
-    importRecipientReferences: async (secret, bundle) =>
-      importRecipientReferencesWithDeps(secret, bundle, dependencies.crypto, channelStorage, now),
+    importRecipientReferences: async (secret, bundle) => {
+      const result = await importRecipientReferencesWithDeps(
+        secret,
+        bundle,
+        dependencies.crypto,
+        channelStorage,
+        now,
+      );
+      markReplayStale(normalizeSecret(secret) as unknown as string);
+      return result;
+    },
   };
 }
 
@@ -341,6 +453,8 @@ async function addFileWithDeps(
   crypto: CryptoOperations,
   channelStorage: Log,
   now: () => number,
+  getReplayContext: (secret: string) => Promise<import('./fileEmit.js').FileReplayContext>,
+  commitReplayEntry: (secret: string, entry: import('nearbytes-log').EventLogEntry) => void,
 ): Promise<FileMetadata> {
   const path = resolveAddPath(rawPath, opts);
   const normalizedSecret = normalizeSecret(secret);
@@ -348,10 +462,11 @@ async function addFileWithDeps(
   const keyPair = await crypto.deriveKeys(normalizedSecret);
   const encrypted = await encryptFileForVolume(crypto, keyPair.privateKey, data);
   const blobHash = await channelStorage.blocks.store(encrypted.encryptedData, true);
+  rememberBlobPlaintextSize(blobHash, data.length);
 
   const createdAt = now();
-  const { fs, observedHead } = await loadFileReplayContext(normalizedSecret, crypto, channelStorage);
-  await appendCreateEvent(channelStorage, crypto, keyPair, {
+  const { fs, observedHead } = await getReplayContext(normalizedSecret);
+  const entry = await appendCreateEvent(channelStorage, crypto, keyPair, {
     path,
     blobHash,
     encryptedKey: encrypted.encryptedKey,
@@ -361,6 +476,7 @@ async function addFileWithDeps(
     observedHead,
     lineages: [lineageAtPath(fs, path)],
   });
+  commitReplayEntry(normalizedSecret, entry);
 
   return {
     path,
@@ -401,13 +517,15 @@ async function mkdirWithDeps(
   crypto: CryptoOperations,
   channelStorage: Log,
   now: () => number,
+  getReplayContext: (secret: string) => Promise<import('./fileEmit.js').FileReplayContext>,
+  commitReplayEntry: (secret: string, entry: import('nearbytes-log').EventLogEntry) => void,
 ): Promise<DirectoryMetadata> {
   const path = normalizeVolumePath(rawPath);
   const normalizedSecret = normalizeSecret(secret);
   const keyPair = await crypto.deriveKeys(normalizedSecret);
   const createdAt = now();
-  const { fs, observedHead } = await loadFileReplayContext(normalizedSecret, crypto, channelStorage);
-  await appendMkdirEvent(
+  const { fs, observedHead } = await getReplayContext(normalizedSecret);
+  const entry = await appendMkdirEvent(
     channelStorage,
     crypto,
     keyPair,
@@ -416,6 +534,7 @@ async function mkdirWithDeps(
     [lineageAtPath(fs, path)],
     observedHead,
   );
+  commitReplayEntry(normalizedSecret, entry);
   return { path, createdAt, explicit: true };
 }
 
@@ -425,12 +544,14 @@ async function deletePathWithDeps(
   crypto: CryptoOperations,
   channelStorage: Log,
   now: () => number,
+  getReplayContext: (secret: string) => Promise<import('./fileEmit.js').FileReplayContext>,
+  commitReplayEntry: (secret: string, entry: import('nearbytes-log').EventLogEntry) => void,
 ): Promise<void> {
   const path = normalizeVolumePath(rawPath);
   const normalizedSecret = normalizeSecret(secret);
   const keyPair = await crypto.deriveKeys(normalizedSecret);
-  const { fs, observedHead } = await loadFileReplayContext(normalizedSecret, crypto, channelStorage);
-  await appendDeleteEvent(
+  const { fs, observedHead } = await getReplayContext(normalizedSecret);
+  const entry = await appendDeleteEvent(
     channelStorage,
     crypto,
     keyPair,
@@ -439,6 +560,7 @@ async function deletePathWithDeps(
     [lineageAtPath(fs, path)],
     observedHead,
   );
+  commitReplayEntry(normalizedSecret, entry);
 }
 
 async function renameWithDeps(
@@ -448,6 +570,8 @@ async function renameWithDeps(
   crypto: CryptoOperations,
   channelStorage: Log,
   now: () => number,
+  getReplayContext: (secret: string) => Promise<import('./fileEmit.js').FileReplayContext>,
+  commitReplayEntry: (secret: string, entry: import('nearbytes-log').EventLogEntry) => void,
 ): Promise<RenameSummary> {
   const fromPath = normalizeVolumePath(rawFrom);
   const toPath = normalizeVolumePath(rawTo);
@@ -456,16 +580,13 @@ async function renameWithDeps(
   }
 
   const normalizedSecret = normalizeSecret(secret);
-  const volume = await openChannel(normalizedSecret, crypto);
-  const entries = await loadEventLog(volume, channelStorage, crypto);
-  await verifyEventLog(entries, volume, crypto);
-
-  const timeline = mapEntriesToTimeline(entries);
+  const replay = await getReplayContext(normalizedSecret);
+  const timeline = mapEntriesToTimeline([...replay.orderedEntries], replay.fs);
   const maxTimestamp = timeline.reduce((max, event) => Math.max(max, event.timestamp), 0);
   const renamedAt = Math.max(now(), maxTimestamp + 1);
   const keyPair = await crypto.deriveKeys(normalizedSecret);
-  const fs = materialize(toCanonicalEntries(entries));
-  await appendRenameEvent(
+  const fs = replay.fs;
+  const entry = await appendRenameEvent(
     channelStorage,
     crypto,
     keyPair,
@@ -473,8 +594,9 @@ async function renameWithDeps(
     toPath,
     renamedAt,
     lineagesForRename(fs, fromPath, toPath),
-    observedHashFromEntries(entries),
+    replay.observedHead,
   );
+  commitReplayEntry(normalizedSecret, entry);
 
   return { fromPath, toPath };
 }
@@ -485,25 +607,20 @@ async function renameWithDeps(
 
 async function listFilesWithDeps(
   secret: string,
-  crypto: CryptoOperations,
-  channelStorage: Log,
+  getReplayContext: (secret: string) => Promise<import('./fileEmit.js').FileReplayContext>,
 ): Promise<FileMetadata[]> {
-  const volume = await openChannel(normalizeSecret(secret), crypto);
-  const entries = await loadEventLog(volume, channelStorage, crypto);
-  await verifyEventLog(entries, volume, crypto);
-  return materializeFilesFromEntries(entries);
+  const replay = await getReplayContext(normalizeSecret(secret));
+  const files = [...replay.fs.files.values()];
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  return files;
 }
 
 async function listDirectoriesWithDeps(
   secret: string,
-  crypto: CryptoOperations,
-  channelStorage: Log,
+  getReplayContext: (secret: string) => Promise<import('./fileEmit.js').FileReplayContext>,
 ): Promise<DirectoryMetadata[]> {
-  const volume = await openChannel(normalizeSecret(secret), crypto);
-  const entries = await loadEventLog(volume, channelStorage, crypto);
-  await verifyEventLog(entries, volume, crypto);
-  const fs = materialize(toCanonicalEntries(entries));
-  return [...fs.directories.values()].sort((a, b) => a.path.localeCompare(b.path));
+  const replay = await getReplayContext(normalizeSecret(secret));
+  return [...replay.fs.directories.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
 
 async function getFileWithDeps(
@@ -511,46 +628,82 @@ async function getFileWithDeps(
   blobHash: string,
   crypto: CryptoOperations,
   channelStorage: Log,
+  getReplayContext: (secret: string) => Promise<import('./fileEmit.js').FileReplayContext>,
 ): Promise<Buffer> {
   const normalizedSecret = normalizeSecret(secret);
-  const volume = await openChannel(normalizedSecret, crypto);
-  const entries = await loadEventLog(volume, channelStorage, crypto);
-  await verifyEventLog(entries, volume, crypto);
-
-  const currentFile = materializeStoredFilesFromEntries(entries).find(
-    (file) => file.blobHash === blobHash,
+  const replay = await getReplayContext(normalizedSecret);
+  const currentPath = [...replay.fs.files.entries()].find(([, file]) => file.blobHash === blobHash)?.[0];
+  if (currentPath === undefined) {
+    throw new DecryptionError('File is not available in the active volume');
+  }
+  const encryptedKey = replay.liveEncryptedKeys.get(currentPath);
+  const currentFile = replay.fs.files.get(currentPath);
+  if (currentFile === undefined || encryptedKey === undefined) {
+    throw new DecryptionError('File is not available in the active volume');
+  }
+  return decryptStoredFile(
+    normalizedSecret,
+    currentFile.blobHash,
+    encryptedKey,
+    crypto,
+    channelStorage,
   );
+}
+
+async function getFileByPathWithDeps(
+  secret: string,
+  path: string,
+  crypto: CryptoOperations,
+  channelStorage: Log,
+  getReplayContext: (secret: string) => Promise<import('./fileEmit.js').FileReplayContext>,
+): Promise<Buffer> {
+  const normalizedSecret = normalizeSecret(secret);
+  const replay = await getReplayContext(normalizedSecret);
+  const currentFile = replay.fs.files.get(path);
   if (!currentFile) {
     throw new DecryptionError('File is not available in the active volume');
   }
+  const encryptedKey = replay.liveEncryptedKeys.get(path);
+  if (encryptedKey === undefined) throw new DecryptionError('File key is not available in the active volume');
+  return decryptStoredFile(
+    normalizedSecret,
+    currentFile.blobHash,
+    encryptedKey,
+    crypto,
+    channelStorage,
+  );
+}
 
+async function decryptStoredFile(
+  normalizedSecret: Secret,
+  blobHash: string,
+  encryptedKey: EncryptedData,
+  crypto: CryptoOperations,
+  channelStorage: Log,
+): Promise<Buffer> {
   const keyPair = await crypto.deriveKeys(normalizedSecret);
   const encryptedData = await channelStorage.blocks.retrieve(blobHash as Hash);
   const plaintext = await decryptFileForVolume(
     crypto,
     keyPair.privateKey,
     encryptedData,
-    currentFile.encryptedKey,
+    encryptedKey,
   );
   return Buffer.from(plaintext);
 }
 
 async function computeSnapshotWithDeps(
   secret: string,
-  crypto: CryptoOperations,
-  channelStorage: Log,
   now: () => number,
+  getReplayContext: (secret: string) => Promise<import('./fileEmit.js').FileReplayContext>,
 ): Promise<SnapshotSummary> {
-  const volume = await openChannel(normalizeSecret(secret), crypto);
-  const entries = await loadEventLog(volume, channelStorage, crypto);
-  await verifyEventLog(entries, volume, crypto);
-
-  const fs = materialize(toCanonicalEntries(entries));
-  const lastEventHash = entries.length > 0 ? entries[entries.length - 1].eventHash : null;
+  const replay = await getReplayContext(normalizeSecret(secret));
+  const fs = replay.fs;
+  const lastEventHash = replay.orderedEntries.length > 0 ? replay.orderedEntries[replay.orderedEntries.length - 1]!.eventHash : null;
 
   return {
     generatedAt: now(),
-    eventCount: entries.length,
+    eventCount: replay.orderedEntries.length,
     fileCount: fs.files.size,
     directoryCount: fs.directories.size,
     lastEventHash,
@@ -559,26 +712,19 @@ async function computeSnapshotWithDeps(
 
 async function getTimelineWithDeps(
   secret: string,
-  crypto: CryptoOperations,
-  channelStorage: Log,
+  getReplayContext: (secret: string) => Promise<import('./fileEmit.js').FileReplayContext>,
 ): Promise<TimelineEvent[]> {
-  const volume = await openChannel(normalizeSecret(secret), crypto);
-  const entries = await loadEventLog(volume, channelStorage, crypto);
-  await verifyEventLog(entries, volume, crypto);
-  return mapEntriesToTimeline(entries);
+  const replay = await getReplayContext(normalizeSecret(secret));
+  return mapEntriesToTimeline([...replay.orderedEntries], replay.fs);
 }
 
 async function getTimelineDeltaWithDeps(
   secret: string,
   afterEventHash: string | null | undefined,
-  crypto: CryptoOperations,
-  channelStorage: Log,
+  getReplayContext: (secret: string) => Promise<import('./fileEmit.js').FileReplayContext>,
 ): Promise<TimelineDelta> {
-  const volume = await openChannel(normalizeSecret(secret), crypto);
-  const entries = await loadEventLog(volume, channelStorage, crypto);
-  await verifyEventLog(entries, volume, crypto);
-
-  const timeline = mapEntriesToTimeline(entries);
+  const replay = await getReplayContext(normalizeSecret(secret));
+  const timeline = mapEntriesToTimeline([...replay.orderedEntries]);
   const requestedCursor = normalizeTimelineCursor(afterEventHash);
   const nextCursor = timeline.at(-1)?.eventHash ?? null;
 
@@ -853,8 +999,8 @@ async function importRecipientReferencesWithDeps(
     const encryptedKey = await wrapFileKeyForVolume(crypto, destinationKeyPair.privateKey, fileKey);
     const createdAt = resolveImportedCreatedAt(item.createdAt, nextTimestamp);
 
-    const fs = materialize(toCanonicalEntries(entries));
-    observedHead = await appendCreateEvent(channelStorage, crypto, destinationKeyPair, {
+    const fs = runMaterialization(toCanonicalEntries(entries));
+    const entry = await appendCreateEvent(channelStorage, crypto, destinationKeyPair, {
       path: finalName,
       blobHash: descriptor.h,
       encryptedKey,
@@ -864,6 +1010,7 @@ async function importRecipientReferencesWithDeps(
       observedHead,
       lineages: [lineageAtPath(fs, finalName)],
     });
+    observedHead = createHash(entry.eventHash);
 
     imported.push({
       path: finalName,
@@ -883,24 +1030,8 @@ async function importRecipientReferencesWithDeps(
 // Materialization helpers
 // ---------------------------------------------------------------------------
 
-function materializeFilesFromEntries(entries: EventLogEntry[]): FileMetadata[] {
-  const files = materializeStoredFilesFromEntries(entries).map<FileMetadata>((file) => ({
-    path: file.path,
-    blobHash: file.blobHash,
-    contentType: file.contentType,
-    size: file.size,
-    mimeType: file.mimeType,
-    createdAt: file.createdAt,
-  }));
-  files.sort((a, b) => {
-    if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
-    return a.path.localeCompare(b.path);
-  });
-  return files;
-}
-
 function materializeStoredFilesFromEntries(entries: EventLogEntry[]): StoredFileRecord[] {
-  const fs = materialize(toCanonicalEntries(entries));
+  const fs = runMaterialization(toCanonicalEntries(entries));
 
   /**
    * Index every CREATE_FILE event by its hash so we can recover the
@@ -953,11 +1084,14 @@ function materializeStoredFilesFromEntries(entries: EventLogEntry[]): StoredFile
   return results;
 }
 
-function mapEntriesToTimeline(entries: EventLogEntry[]): TimelineEvent[] {
-  const rows = buildTimelineRows(entries);
-  const fs = materialize(toCanonicalEntries(entries));
+function mapEntriesToTimeline(
+  entries: EventLogEntry[],
+  fs?: MaterializedFileSystem,
+): TimelineEvent[] {
+  const rows = buildTimelineRows(entries, fs !== undefined);
+  const materialized = fs ?? runMaterialization(toCanonicalEntries(entries));
   const shadowsByTiebreak = new Map<string, MaterializedShadow['reject']>();
-  for (const shadow of fs.shadows) shadowsByTiebreak.set(shadow.tiebreak, shadow.reject);
+  for (const shadow of materialized.shadows) shadowsByTiebreak.set(shadow.tiebreak, shadow.reject);
 
   return rows.map((row) => {
     const out: TimelineEvent = {
@@ -988,9 +1122,9 @@ function mapEntriesToTimeline(entries: EventLogEntry[]): TimelineEvent[] {
   });
 }
 
-function buildTimelineRows(entries: EventLogEntry[]): StoredTimelineRow[] {
+function buildTimelineRows(entries: EventLogEntry[], alreadyOrdered = false): StoredTimelineRow[] {
   const rows: StoredTimelineRow[] = [];
-  const orderedEntries = orderEventLogEntries(entries);
+  const orderedEntries = alreadyOrdered ? entries : orderEventLogEntries(entries);
 
   for (let sequence = 0; sequence < orderedEntries.length; sequence += 1) {
     const entry = orderedEntries[sequence]!;
@@ -1230,8 +1364,8 @@ async function upgradeLegacyFilesForExport(
     );
     const encrypted = await encryptFileForVolume(crypto, keyPair.privateKey, plaintext);
     const blobHash = await channelStorage.blocks.store(encrypted.encryptedData, true);
-    const fs = materialize(toCanonicalEntries(entries));
-    observedHead = await appendCreateEvent(channelStorage, crypto, keyPair, {
+    const fs = runMaterialization(toCanonicalEntries(entries));
+    const entry = await appendCreateEvent(channelStorage, crypto, keyPair, {
       path: file.path,
       blobHash,
       encryptedKey: encrypted.encryptedKey,
@@ -1241,6 +1375,7 @@ async function upgradeLegacyFilesForExport(
       observedHead,
       lineages: [lineageAtPath(fs, file.path)],
     });
+    observedHead = createHash(entry.eventHash);
 
     upgradedCount += 1;
     timestamp += 1;
@@ -1277,8 +1412,8 @@ async function importSourceBundleItems(
     const encryptedKey = await wrapFileKeyForVolume(crypto, destinationKeyPair.privateKey, fileKey);
     const createdAt = resolveImportedCreatedAt(item.createdAt, nextTimestamp);
 
-    const fs = materialize(toCanonicalEntries([...entries]));
-    observedHead = await appendCreateEvent(channelStorage, crypto, destinationKeyPair, {
+    const fs = runMaterialization(toCanonicalEntries([...entries]));
+    const entry = await appendCreateEvent(channelStorage, crypto, destinationKeyPair, {
       path: finalName,
       blobHash: item.ref.c.h,
       encryptedKey,
@@ -1288,6 +1423,7 @@ async function importSourceBundleItems(
       observedHead,
       lineages: [lineageAtPath(fs, finalName)],
     });
+    observedHead = createHash(entry.eventHash);
 
     imported.push({
       path: finalName,
@@ -1367,7 +1503,7 @@ async function appendCreateEvent(
     observedHead?: Hash;
     lineages: readonly CausalLineage[];
   },
-): Promise<Hash> {
+): Promise<EventLogEntry> {
   const contentDescriptor =
     input.contentType === 'm'
       ? ({ protocol: 'nb.content.manifest.v1', manifestHash: input.blobHash as Hash } as const)
@@ -1393,7 +1529,7 @@ async function appendMkdirEvent(
   createdAt: number,
   lineages: readonly CausalLineage[],
   observedHead?: Hash,
-): Promise<Hash> {
+): Promise<EventLogEntry> {
   const payload: EventPayload = { type: EventType.MKDIR, path, createdAt };
   return emitFileEvent(crypto, keyPair, channelStorage, payload, observedHead, lineages, []);
 }
@@ -1406,7 +1542,7 @@ async function appendDeleteEvent(
   deletedAt: number,
   lineages: readonly CausalLineage[],
   observedHead?: Hash,
-): Promise<Hash> {
+): Promise<EventLogEntry> {
   const payload: EventPayload = { type: EventType.DELETE, path, deletedAt };
   return emitFileEvent(crypto, keyPair, channelStorage, payload, observedHead, lineages, []);
 }
@@ -1420,7 +1556,7 @@ async function appendRenameEvent(
   renamedAt: number,
   lineages: readonly CausalLineage[],
   observedHead?: Hash,
-): Promise<Hash> {
+): Promise<EventLogEntry> {
   const payload: EventPayload = { type: EventType.RENAME, fromPath, toPath, renamedAt };
   return emitFileEvent(crypto, keyPair, channelStorage, payload, observedHead, lineages, []);
 }

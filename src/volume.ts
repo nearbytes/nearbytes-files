@@ -8,8 +8,8 @@ import {
   verifyEventLog,
 } from 'nearbytes-log';
 import type { DirectoryMetadata } from './fileEvents.js';
-import { materialize } from './fileMaterializer.js';
 import { toCanonicalEntries } from './fileLogEntries.js';
+import { runMaterialization } from './materialization.js';
 
 /**
  * Volume is a channel identity used by the file protocol.
@@ -50,7 +50,7 @@ export interface VolumeFileSystemState {
  * observed-log-head parent, then timestamp/hash among currently ready events.
  */
 export function replayEvents(entries: EventLogEntry[]): VolumeFileSystemState {
-  const fs = materialize(toCanonicalEntries(entries));
+  const fs = runMaterialization(toCanonicalEntries(entries));
 
   const files = new Map<string, VolumeFileMetadata>();
   for (const [, meta] of fs.files) {

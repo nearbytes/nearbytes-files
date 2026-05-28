@@ -66,3 +66,12 @@ The current implementation uses the v0.5 replay and emission model:
 3. replays topologically over observed-log-head refs;
 4. uses timestamps only between currently ready events;
 5. resolves valid target conflicts as latest-wins.
+
+Materialization implementation supports both:
+
+- full replay from ordered canonical entries; and
+- incremental replay from an existing materialized state plus appended entries,
+  provided the newly ordered stream preserves the previous ordered prefix.
+
+Incremental replay is an implementation optimization only and MUST be
+observationally equivalent to full replay.

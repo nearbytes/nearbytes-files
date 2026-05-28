@@ -35,9 +35,14 @@ export interface Context {
 /**
  * Creates a CLI context: filesystem log, file service, empty volume cache.
  */
+export interface CreateContextOptions {
+  readonly webdav?: boolean;
+  readonly webdavPort?: number;
+}
+
 export async function createContext(
   config: NearbytesConfig,
-  options?: { webdav?: boolean },
+  options?: CreateContextOptions,
 ): Promise<Context> {
   const skeleton = await createFilesystemSkeletonFromConfig(config);
   const fileService = createFileService({ log: skeleton.log, crypto: skeleton.crypto });
@@ -51,6 +56,7 @@ export async function createContext(
       fileService,
       crypto: skeleton.crypto,
       log: skeleton.log,
+      port: options.webdavPort,
     });
   }
 

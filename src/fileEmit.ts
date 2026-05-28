@@ -2,13 +2,27 @@
  * Central emit path for FILES visible `blockRefs`.
  */
 
+import { performance } from 'node:perf_hooks';
 import type { KeyPair } from 'nearbytes-crypto';
 import { createHash, type CryptoOperations, type EventPayload, type Hash } from 'nearbytes-crypto';
+import { EventType, type EncryptedData } from 'nearbytes-crypto';
 import type { Log } from 'nearbytes-log';
-import { createSignedEvent, loadEventLog, openChannel, verifyEventLog } from 'nearbytes-log';
-import { materialize, type MaterializedFileSystem } from './fileMaterializer.js';
-import { observedLogHead, toCanonicalEntries } from './fileLogEntries.js';
-import { createSecret } from 'nearbytes-crypto';
+import type { Channel, EventLogEntry } from 'nearbytes-log';
+import {
+  createSignedEvent,
+  eventEnvelopePublicKeyMatches,
+  hydrateSignedEvent,
+  loadEventLog,
+  openChannel,
+  verifyEventLog,
+} from 'nearbytes-log';
+import { materializeIncremental, type MaterializedFileSystem } from './fileMaterializer.js';
+import { observedLogHeadFromOrdered, orderEventLogEntries, toCanonicalEntriesFromOrdered } from './fileLogEntries.js';
+import { createSecret, type Secret } from 'nearbytes-crypto';
+import { cachedBlobPlaintextSize, rememberBlobPlaintextSize } from './fileBlobSizes.js';
+import { decryptFileForVolume } from './fileCrypto.js';
+import { debugEnabled } from './debug.js';
+import { runMaterialization } from './materialization.js';
 
 export interface CausalLineage {
   readonly supersededEvent?: Hash;
@@ -58,29 +72,179 @@ export async function loadMaterializedFileSystem(
   log: Log,
 ): Promise<MaterializedFileSystem> {
   const volume = await openChannel(createSecret(secret), crypto);
-  const entries = await loadEventLog(volume, log, crypto);
-  await verifyEventLog(entries, volume, crypto);
-  return materialize(toCanonicalEntries(entries));
+  const { orderedEntries } = await loadChannelEntries(volume, log, crypto);
+  return runMaterialization(toCanonicalEntriesFromOrdered(orderedEntries));
 }
 
 export interface FileReplayContext {
   readonly fs: MaterializedFileSystem;
   readonly observedHead?: Hash;
+  readonly orderedEntries: readonly EventLogEntry[];
+  readonly liveEncryptedKeys: ReadonlyMap<string, EncryptedData>;
+}
+
+export interface LoadFileReplayContextOptions {
+  readonly seed?: FileReplayContext;
+  /** Decrypt live blobs to fill `FileMetadata.size` (WebDAV PROPFIND). */
+  readonly enrichSizes?: boolean;
 }
 
 export async function loadFileReplayContext(
   secret: string,
   crypto: CryptoOperations,
   log: Log,
+  options: LoadFileReplayContextOptions = {},
 ): Promise<FileReplayContext> {
+  const { seed, enrichSizes = false } = options;
+  const timing = debugEnabled('timing');
+  const started = timing ? performance.now() : 0;
   const volume = await openChannel(createSecret(secret), crypto);
-  const entries = await loadEventLog(volume, log, crypto);
-  await verifyEventLog(entries, volume, crypto);
-  const head = observedLogHead(entries);
+  const afterOpen = timing ? performance.now() : 0;
+  const { orderedEntries, loadedCount } = await loadChannelEntries(volume, log, crypto, seed);
+  const afterLoad = timing ? performance.now() : 0;
+  const head = observedLogHeadFromOrdered(orderedEntries);
+  let fs: MaterializedFileSystem;
+  if (seed !== undefined && hasOrderedPrefix(seed.orderedEntries, orderedEntries)) {
+    const appended = orderedEntries.slice(seed.orderedEntries.length);
+    fs = appended.length > 0
+      ? materializeIncremental(seed.fs, toCanonicalEntriesFromOrdered(appended))
+      : seed.fs;
+  } else {
+    fs = runMaterialization(toCanonicalEntriesFromOrdered(orderedEntries));
+  }
+  if (timing) {
+    const afterMaterialize = performance.now();
+    const round = (value: number) => Math.round(value * 10) / 10;
+    console.error(
+      `[nearbytes-webdav][timing] replay open=${round(afterOpen - started)}ms load=${round(afterLoad - afterOpen)}ms` +
+        ` materialize=${round(afterMaterialize - afterLoad)}ms entries=${orderedEntries.length} loaded=${loadedCount}`,
+    );
+  }
+  const liveEncryptedKeys = new Map<string, EncryptedData>();
+  const keyByEventHash = new Map<string, EncryptedData>();
+  for (const entry of orderedEntries) {
+    const payload = entry.signedEvent.payload;
+    if (payload.type !== EventType.CREATE_FILE) continue;
+    keyByEventHash.set(entry.eventHash, payload.wrappedKey);
+  }
+  for (const [path, originHash] of fs.fileOrigins) {
+    const wrapped = keyByEventHash.get(originHash);
+    if (wrapped !== undefined) liveEncryptedKeys.set(path, wrapped);
+  }
+  const sizedFs = applyCachedBlobSizes(fs);
+  const finalFs = enrichSizes
+    ? await enrichLiveFileSizes(sizedFs, liveEncryptedKeys, createSecret(secret), crypto, log)
+    : sizedFs;
   return {
-    fs: materialize(toCanonicalEntries(entries)),
+    fs: finalFs,
     observedHead: head !== undefined ? createHash(head) : undefined,
+    orderedEntries,
+    liveEncryptedKeys,
   };
+}
+
+/**
+ * Loads channel events in causal replay order. When `seed` is provided and the
+ * log only grew by append, reuses hydrated entries and verifies/decrypts only
+ * new event hashes instead of replaying the full channel from disk.
+ */
+async function loadChannelEntries(
+  volume: Channel,
+  log: Log,
+  crypto: CryptoOperations,
+  seed?: FileReplayContext,
+): Promise<{ orderedEntries: EventLogEntry[]; loadedCount: number }> {
+  if (seed === undefined) {
+    const entries = await loadEventLog(volume, log, crypto);
+    await verifyEventLog(entries, volume, crypto);
+    return { orderedEntries: orderEventLogEntries(entries), loadedCount: entries.length };
+  }
+
+  const keyPair = await crypto.deriveKeys(volume.secret);
+  const listed = await log.events.listEvents(keyPair.publicKey);
+  const known = new Set(seed.orderedEntries.map((entry) => entry.eventHash));
+  const newHashes = listed.filter((hash) => !known.has(hash));
+
+  if (newHashes.length === 0) {
+    return { orderedEntries: [...seed.orderedEntries], loadedCount: 0 };
+  }
+
+  const newEntries: EventLogEntry[] = [];
+  for (const eventHash of newHashes) {
+    try {
+      const signedEvent = await log.events.retrieveEvent(keyPair.publicKey, eventHash);
+      if (!eventEnvelopePublicKeyMatches(signedEvent, keyPair.publicKey)) continue;
+      newEntries.push({
+        eventHash,
+        signedEvent: await hydrateSignedEvent(crypto, keyPair.privateKey, signedEvent),
+      });
+    } catch {
+      continue;
+    }
+  }
+  await verifyEventLog(newEntries, volume, crypto);
+  const orderedEntries = orderEventLogEntries([...seed.orderedEntries, ...newEntries]);
+  if (!hasOrderedPrefix(seed.orderedEntries, orderedEntries)) {
+    const entries = await loadEventLog(volume, log, crypto);
+    await verifyEventLog(entries, volume, crypto);
+    return { orderedEntries: orderEventLogEntries(entries), loadedCount: entries.length };
+  }
+  return { orderedEntries, loadedCount: newEntries.length };
+}
+
+/**
+ * CREATE_FILE payloads do not carry plaintext length; fill `FileMetadata.size`
+ * using the blob cache or, as a last resort, decrypting live blobs (WebDAV).
+ */
+async function enrichLiveFileSizes(
+  fs: MaterializedFileSystem,
+  liveEncryptedKeys: ReadonlyMap<string, EncryptedData>,
+  volumeSecret: Secret,
+  crypto: CryptoOperations,
+  log: Log,
+): Promise<MaterializedFileSystem> {
+  const files = new Map(fs.files);
+  let changed = false;
+  const keyPair = await crypto.deriveKeys(volumeSecret);
+
+  for (const [path, meta] of files) {
+    if (meta.size > 0) continue;
+    const cached = cachedBlobPlaintextSize(meta.blobHash);
+    if (cached !== undefined) {
+      files.set(path, { ...meta, size: cached });
+      changed = true;
+      continue;
+    }
+    const wrapped = liveEncryptedKeys.get(path);
+    if (wrapped === undefined) continue;
+    try {
+      const encryptedData = await log.blocks.retrieve(meta.blobHash as Hash);
+      const plaintext = await decryptFileForVolume(
+        crypto,
+        keyPair.privateKey,
+        encryptedData,
+        wrapped,
+      );
+      const size = plaintext.byteLength;
+      rememberBlobPlaintextSize(meta.blobHash, size);
+      files.set(path, { ...meta, size });
+      changed = true;
+    } catch {
+      // leave size at 0 when content is unavailable
+    }
+  }
+  return changed ? { ...fs, files } : fs;
+}
+
+function hasOrderedPrefix(
+  previous: readonly EventLogEntry[],
+  next: readonly EventLogEntry[],
+): boolean {
+  if (previous.length > next.length) return false;
+  for (let i = 0; i < previous.length; i += 1) {
+    if (previous[i]!.eventHash !== next[i]!.eventHash) return false;
+  }
+  return true;
 }
 
 export async function emitFileEvent(
@@ -91,8 +255,77 @@ export async function emitFileEvent(
   observedHead: Hash | undefined,
   lineages: readonly CausalLineage[],
   introducedBlocks: readonly Hash[],
-): Promise<Hash> {
+): Promise<EventLogEntry> {
   const blockRefs = buildBlockRefs(observedHead, lineages, introducedBlocks);
-  const event = await createSignedEvent(crypto, keyPair, payload, blockRefs);
-  return log.events.storeEvent(keyPair.publicKey, event);
+  const signedEvent = await createSignedEvent(crypto, keyPair, payload, blockRefs);
+  const eventHash = await log.events.storeEvent(keyPair.publicKey, signedEvent);
+  return { eventHash, signedEvent };
+}
+
+/**
+ * Applies newly emitted entries to an in-memory replay snapshot (no disk read).
+ */
+export function extendFileReplayContext(
+  base: FileReplayContext,
+  appended: readonly EventLogEntry[],
+): FileReplayContext {
+  const known = new Set(base.orderedEntries.map((entry) => entry.eventHash));
+  const unique = appended.filter((entry) => !known.has(entry.eventHash));
+  if (unique.length === 0) return base;
+
+  const orderedEntries = orderEventLogEntries([...base.orderedEntries, ...unique]);
+  let fs: MaterializedFileSystem;
+  if (hasOrderedPrefix(base.orderedEntries, orderedEntries)) {
+    const tail = orderedEntries.slice(base.orderedEntries.length);
+    fs =
+      tail.length > 0
+        ? materializeIncremental(base.fs, toCanonicalEntriesFromOrdered(tail))
+        : base.fs;
+  } else {
+    fs = runMaterialization(toCanonicalEntriesFromOrdered(orderedEntries));
+  }
+
+  const liveEncryptedKeys = new Map(base.liveEncryptedKeys);
+  for (const entry of unique) {
+    const payload = entry.signedEvent.payload;
+    if (payload.type === EventType.CREATE_FILE) {
+      liveEncryptedKeys.set(payload.path, payload.wrappedKey);
+    }
+  }
+  for (const [path, originHash] of fs.fileOrigins) {
+    const wrapped = entryWrappedKey(orderedEntries, originHash);
+    if (wrapped !== undefined) liveEncryptedKeys.set(path, wrapped);
+  }
+
+  const head = observedLogHeadFromOrdered(orderedEntries);
+  return {
+    fs: applyCachedBlobSizes(fs),
+    observedHead: head !== undefined ? createHash(head) : undefined,
+    orderedEntries,
+    liveEncryptedKeys,
+  };
+}
+
+function applyCachedBlobSizes(fs: MaterializedFileSystem): MaterializedFileSystem {
+  const files = new Map(fs.files);
+  let changed = false;
+  for (const [path, meta] of files) {
+    if (meta.size > 0) continue;
+    const size = cachedBlobPlaintextSize(meta.blobHash);
+    if (size === undefined) continue;
+    files.set(path, { ...meta, size });
+    changed = true;
+  }
+  return changed ? { ...fs, files } : fs;
+}
+
+function entryWrappedKey(
+  orderedEntries: readonly EventLogEntry[],
+  eventHash: string,
+): EncryptedData | undefined {
+  const entry = orderedEntries.find((candidate) => candidate.eventHash === eventHash);
+  if (entry === undefined) return undefined;
+  const payload = entry.signedEvent.payload;
+  if (payload.type !== EventType.CREATE_FILE) return undefined;
+  return payload.wrappedKey;
 }

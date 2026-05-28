@@ -163,6 +163,81 @@ export function materialize(entries: readonly CanonicalEntry[]): MaterializedFil
   return { files, directories, fileOrigins, entryHeads, shadows };
 }
 
+export function materializeIncremental(
+  base: MaterializedFileSystem,
+  entries: readonly CanonicalEntry[],
+): MaterializedFileSystem {
+  const files = new Map(base.files);
+  const fileOrigins = new Map(base.fileOrigins);
+  const entryHeads = new Map(base.entryHeads);
+  const shadows = [...base.shadows];
+  const warnedVerbs = new Set<string>();
+
+  const dirs = buildDirInfoFromSnapshot(base);
+  const recordShadow = (
+    tiebreak: string,
+    reject: MaterializedShadow['reject'],
+  ): void => {
+    shadows.push({ tiebreak, reject });
+  };
+
+  for (const { tiebreak, event } of entries) {
+    switch (event.kind) {
+      case 'CREATE_FILE':
+        applyCreateFile(event, files, dirs, fileOrigins, entryHeads, tiebreak);
+        break;
+      case 'MKDIR':
+        applyMkdir(event, files, dirs, fileOrigins, entryHeads, tiebreak);
+        break;
+      case 'DELETE':
+        applyDelete(event, files, dirs, fileOrigins, entryHeads, tiebreak);
+        break;
+      case 'RENAME':
+        applyRename(event, files, dirs, fileOrigins, entryHeads, tiebreak, recordShadow.bind(null, tiebreak));
+        break;
+      case 'OTHER': {
+        if (!isKnownNonFileVerb(event.verb) && !warnedVerbs.has(event.verb)) {
+          warnedVerbs.add(event.verb);
+          process.stderr.write(
+            `[nearbytes-files:materializer] warning: skipping unknown event verb "${event.verb}" — replay will continue\n`,
+          );
+          recordShadow(tiebreak, { kind: 'unknown', verb: event.verb });
+        }
+        break;
+      }
+    }
+  }
+
+  const directories = new Map<string, DirectoryMetadata>();
+  for (const [path, info] of dirs) {
+    directories.set(path, {
+      path,
+      createdAt: info.createdAt,
+      explicit: info.explicit,
+    });
+  }
+
+  return { files, directories, fileOrigins, entryHeads, shadows };
+}
+
+function buildDirInfoFromSnapshot(base: MaterializedFileSystem): Map<string, DirInfo> {
+  const dirs = new Map<string, DirInfo>();
+  for (const [path, dir] of base.directories) {
+    dirs.set(path, { createdAt: dir.createdAt, explicit: dir.explicit, fileCount: 0 });
+  }
+  for (const filePath of base.files.keys()) {
+    for (const ancestor of ancestorPaths(filePath)) {
+      const info = dirs.get(ancestor);
+      if (info !== undefined) {
+        info.fileCount += 1;
+      } else {
+        dirs.set(ancestor, { createdAt: 0, explicit: false, fileCount: 1 });
+      }
+    }
+  }
+  return dirs;
+}
+
 /** App-layer verbs that legitimately produce no filesystem effect. */
 function isKnownNonFileVerb(verb: string): boolean {
   return (

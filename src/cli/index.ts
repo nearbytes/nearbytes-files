@@ -38,6 +38,7 @@ import {
 } from './commands.js';
 import { cmdPeers, cmdMonitor, cmdWhoami } from './peersMonitor.js';
 import { startRepl } from './repl.js';
+import { applyDebugOption, debugEnabled, parseWebDavPort } from '../debug.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -49,8 +50,7 @@ function die(msg: string): never {
 }
 
 function isDebugEnabled(): boolean {
-  const opts = program.opts<{ debug?: boolean }>();
-  return opts.debug === true || process.env['NEARBYTES_DEBUG'] === '1';
+  return debugEnabled('cli');
 }
 
 function formatErrorForCli(err: unknown, debug: boolean): string {
@@ -87,10 +87,14 @@ program
     false,
   )
   .option(
-    '--debug',
-    'Print stack traces and verbose diagnostics on command errors',
-    false,
-  );
+    '--debug [areas]',
+    'Debug logging: cli, webdav, timing (comma-separated; omit areas to enable all)',
+  )
+  .option('--webdav-port <port>', 'WebDAV HTTPS listen port (REPL only)', '9843');
+
+program.hook('preAction', (thisCommand) => {
+  applyDebugOption(thisCommand.opts<{ debug?: boolean | string }>().debug);
+});
 
 /**
  * Boot the interactive REPL. Shared by the explicit `repl` subcommand and
@@ -103,16 +107,19 @@ async function runRepl(): Promise<void> {
     config?: string;
     dataDir: string;
     monitor: boolean;
-    debug: boolean;
+    webdavPort: string;
   }>();
   const config = await readConfig(opts.config).catch(() => emptyConfig(opts.dataDir));
-  const ctx = await createContext({ ...config, dataDir: opts.dataDir ?? config.dataDir }, { webdav: true });
+  const ctx = await createContext(
+    { ...config, dataDir: opts.dataDir ?? config.dataDir },
+    { webdav: true, webdavPort: parseWebDavPort(opts.webdavPort) },
+  );
   if (ctx.webdav !== null) {
     console.error(`WebDAV: ${ctx.webdav.baseUrl}/<volume>/ (Basic user=<volume> password=<secret>)`);
   }
   await startRepl(ctx, {
     autoMonitor: opts.monitor === true,
-    debug: opts.debug === true || process.env['NEARBYTES_DEBUG'] === '1',
+    debug: debugEnabled('cli'),
   });
 }
 

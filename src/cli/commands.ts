@@ -826,10 +826,10 @@ export function cmdHelp(): void {
 ${bold('Nearbytes REPL')} ${dim('— FTP/SFTP-style commands. The "file" prefix is optional everywhere.')}
 
 ${cyan('Startup / global CLI options')}
-  nbf ${dim('[-c <config>] [-d <dataDir>] [-m] [--debug] [repl]')}
+  nbf ${dim('[-c <config>] [-d <dataDir>] [-m] [--debug [areas]] [--webdav-port <port>] [repl]')}
                                          ${dim('-m auto-mounts monitor on REPL start')}
-                                         ${dim('--debug prints stack traces on errors')}
-                                         ${dim('-d is global dataDir; in mget, -d means destination dir')}
+                                         ${dim('--debug areas: cli, webdav, timing (comma-separated; all if omitted)')}
+                                         ${dim('--webdav-port default 9843; -d is dataDir (in mget: destination dir)')}
 
 ${cyan('Remote filesystem (volume)')}
   ls ${dim('[path] [-s <secret>]')}                List entries under path ${dim('(default: cwd, alias: dir, list)')}

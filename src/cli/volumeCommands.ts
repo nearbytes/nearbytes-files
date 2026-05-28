@@ -8,6 +8,7 @@ import {
   secretVolumePrefix,
   type VolumeSessionFile,
 } from './volumeSessionStore.js';
+import { bumpWebDavView } from '../webdav/access.js';
 
 function sessionFileFromContext(ctx: Context): VolumeSessionFile {
   return {
@@ -22,6 +23,7 @@ async function persistVolumeRegistry(ctx: Context): Promise<void> {
 
 export function resetTimelineCursor(ctx: Context): void {
   ctx.timelineCursorHash = null;
+  bumpWebDavView(ctx);
 }
 
 export async function loadVolumeRegistryFromDisk(ctx: Context): Promise<void> {

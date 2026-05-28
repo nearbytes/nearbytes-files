@@ -13,6 +13,13 @@ export interface WebDavAccess {
   resolveVolumeSecret(name: string): string | undefined;
   timelineCursorForSecret(secret: string): string | undefined;
   isReadOnlySecret(secret: string): boolean;
+  /** Changes whenever timeline cursor or view generation bumps (invalidates client caches). */
+  getViewEpoch(): string;
+  bumpView(): void;
+}
+
+export function bumpWebDavView(ctx: Context): void {
+  ctx.webdavViewGeneration += 1;
 }
 
 export function createWebDavAccess(ctx: Context): WebDavAccess {
@@ -66,6 +73,14 @@ export function createWebDavAccess(ctx: Context): WebDavAccess {
     },
     isReadOnlySecret(secret) {
       return this.timelineCursorForSecret(secret) !== undefined;
+    },
+    getViewEpoch() {
+      const vol = ctx.volumeSessionActive ?? '_';
+      const cursor = ctx.timelineCursorHash ?? 'live';
+      return `${vol}@${cursor}:g${ctx.webdavViewGeneration}`;
+    },
+    bumpView() {
+      bumpWebDavView(ctx);
     },
   };
 }

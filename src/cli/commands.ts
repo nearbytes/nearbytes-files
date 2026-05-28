@@ -28,6 +28,7 @@ import {
 } from './volumeCommands.js';
 import { secretVolumePrefix } from './volumeSessionStore.js';
 import { findEventIndex, formatTimelineGotoIndexError } from '../fileEmit.js';
+import { bumpWebDavView } from '../webdav/access.js';
 import {
   resolveRemotePath,
   joinRemotePaths,
@@ -410,6 +411,7 @@ export async function cmdTimelineGoto(ctx: Context, selector: string): Promise<v
 
   const hash = replay.orderedEntries[idx]!.eventHash;
   ctx.timelineCursorHash = hash;
+  bumpWebDavView(ctx);
   const atHead = idx === replay.orderedEntries.length - 1;
   if (atHead) {
     ctx.timelineCursorHash = null;
@@ -417,6 +419,9 @@ export async function cmdTimelineGoto(ctx: Context, selector: string): Promise<v
   } else {
     console.log(green(`✓ Timeline cursor at event #${idx + 1} (read-only view)`));
     console.log(dim(`  ${hash}`));
+    console.log(
+      dim('  WebDAV ETags updated — if Finder still shows the old tree, press ⌘R in that window'),
+    );
   }
 }
 
@@ -945,6 +950,7 @@ ${cyan('Volume connections')}
 
 ${cyan('WebDAV (local mount)')}
   webdav status                          Show URL, profile credentials hint, client login state
+  webdav refresh                         Bump ETags so Finder/Explorer/gvfs pick up timeline changes
   webdav logout                          Force Finder to re-authenticate
 
 ${cyan('Profiles (sync keypairs — many served in parallel)')}

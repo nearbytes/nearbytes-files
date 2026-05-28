@@ -33,6 +33,8 @@ export interface Context {
   /** Set when a WebDAV client completes successful Basic auth for the current generation. */
   webdavLastAuthProfile: string | null;
   webdavLastAuthAt: number | null;
+  /** Bumped on timeline cursor / view changes so WebDAV ETags change (Finder, Explorer, gvfs). */
+  webdavViewGeneration: number;
   /**
    * Current "remote working directory" inside the active volume — used by
    * FTP-style commands so users can `cd notes/2026 && ls`. Empty string
@@ -76,6 +78,7 @@ export async function createContext(
     webdavAuthenticatedGeneration: null,
     webdavLastAuthProfile: null,
     webdavLastAuthAt: null,
+    webdavViewGeneration: 0,
     remoteCwd: '',
 
     async destroy(): Promise<void> {

@@ -8,6 +8,7 @@ import type { WebDavAccess } from './access.js';
 import { logWebDavAuthFailure } from './access.js';
 import { debugEnabled } from '../debug.js';
 import { lockDiscovery, multistatus, responseHref } from './xml.js';
+import { snapshotViewLastModified, webDavResourceEtag } from './viewEpoch.js';
 
 export interface WebDavHandlerDeps {
   readonly fileService: FileService;
@@ -34,8 +35,9 @@ function send(
   const extra =
     body === undefined ? { 'Content-Length': '0' } : { 'Content-Length': String(Buffer.byteLength(body)) };
   res.writeHead(status, {
-    'Cache-Control': 'no-store',
+    'Cache-Control': 'no-store, no-cache, must-revalidate',
     Pragma: 'no-cache',
+    Expires: '0',
     ...extra,
     ...headers,
   });
@@ -188,12 +190,22 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
 
       if (parsed.kind === 'root') {
         if (req.method === 'PROPFIND') {
+          const viewEpoch = access.getViewEpoch();
+          const rootModified = new Date();
           const parts: string[] = [
-            responseHref('/', { isCollection: true }),
+            responseHref('/', {
+              isCollection: true,
+              etag: webDavResourceEtag(viewEpoch, 'root'),
+              lastModified: rootModified,
+            }),
           ];
           for (const name of access.listVolumeNames()) {
             parts.push(
-              responseHref(`/${encodeURIComponent(name)}/`, { isCollection: true }),
+              responseHref(`/${encodeURIComponent(name)}/`, {
+                isCollection: true,
+                etag: webDavResourceEtag(viewEpoch, `vol:${name}`),
+                lastModified: rootModified,
+              }),
             );
           }
           send(res, 207, multistatus(parts.join('\n')), {
@@ -214,6 +226,8 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
       const readOnly = access.isReadOnlySecret(secret);
       const inner = parsed.inner;
       const volume = parsed.volume;
+      const viewEpoch = access.getViewEpoch();
+      const etagFor = (tag: string | undefined) => webDavResourceEtag(viewEpoch, tag);
 
       if (req.method === 'LOCK') {
         await readBody(req);
@@ -242,12 +256,13 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
         const snapshotStarted = performance.now();
         const snapshot = await deps.snapshotForSecret(secret);
         debugStage(req, inner, 'snapshotForSecret', snapshotStarted);
+        const viewModified = snapshotViewLastModified(snapshot);
 
         const files = [...snapshot.fs.files.values()].sort((a, b) => a.path.localeCompare(b.path));
         const dirs = [...snapshot.fs.directories.values()].sort((a, b) => a.path.localeCompare(b.path));
         const parts: string[] = [];
         const baseHref = hrefFor(volume, inner);
-        const baseEtag =
+        const baseResourceTag =
           inner.length > 0
             ? snapshot.fs.fileOrigins.get(inner) ?? snapshot.fs.entryHeads.get(inner) ?? snapshot.observedHead
             : snapshot.observedHead;
@@ -260,9 +275,10 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
         parts.push(
           responseHref(baseIsDir && !baseHref.endsWith('/') ? `${baseHref}/` : baseHref, {
             isCollection: baseIsDir,
-            etag: baseEtag,
+            etag: etagFor(baseResourceTag),
             length: baseFile?.size,
-            lastModified: baseFile !== undefined ? new Date(baseFile.createdAt) : undefined,
+            lastModified:
+              baseFile !== undefined ? new Date(baseFile.createdAt) : baseIsDir ? viewModified : undefined,
           }),
         );
 
@@ -274,11 +290,12 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
         for (const dir of dirs) {
           if (!underScope(inner, dir.path) || dir.path === inner) continue;
           if (depth === '1' && !isDirectChild(inner, dir.path)) continue;
-          const etag = snapshot.fs.entryHeads.get(dir.path) ?? snapshot.observedHead;
+          const dirTag = snapshot.fs.entryHeads.get(dir.path) ?? snapshot.observedHead;
           parts.push(
             responseHref(`${hrefFor(volume, dir.path)}/`, {
               isCollection: true,
-              etag,
+              etag: etagFor(dirTag),
+              lastModified: viewModified,
             }),
           );
         }
@@ -286,11 +303,11 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
           if (!underScope(inner, file.path)) continue;
           if (file.path === inner) continue;
           if (depth === '1' && !isDirectChild(inner, file.path)) continue;
-          const etag = snapshot.fs.fileOrigins.get(file.path) ?? snapshot.fs.entryHeads.get(file.path);
+          const fileTag = snapshot.fs.fileOrigins.get(file.path) ?? snapshot.fs.entryHeads.get(file.path);
           parts.push(
             responseHref(hrefFor(volume, file.path), {
               isCollection: false,
-              etag,
+              etag: etagFor(fileTag),
               length: file.size,
               lastModified: new Date(file.createdAt),
             }),
@@ -307,11 +324,12 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
           send(res, 404);
           return;
         }
-        const etag = snapshot.fs.fileOrigins.get(inner) ?? snapshot.fs.entryHeads.get(inner);
+        const fileTag = snapshot.fs.fileOrigins.get(inner) ?? snapshot.fs.entryHeads.get(inner);
         const headers: Record<string, string> = {
           'Content-Type': meta.mimeType ?? 'application/octet-stream',
         };
-        if (etag !== undefined) headers.ETag = `"${etag}"`;
+        headers.ETag = `"${etagFor(fileTag)}"`;
+        headers['Last-Modified'] = new Date(meta.createdAt).toUTCString();
         if (req.method === 'HEAD') {
           if (meta.size > 0) headers['Content-Length'] = String(meta.size);
           send(res, 200, undefined, headers);
@@ -319,8 +337,9 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
         }
         const data = await deps.readFileFromSnapshot(secret, inner, snapshot);
         res.writeHead(200, {
-          'Cache-Control': 'no-store',
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
           Pragma: 'no-cache',
+          Expires: '0',
           ...headers,
           'Content-Length': String(data.length),
         });

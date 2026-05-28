@@ -49,5 +49,11 @@ export function createStandaloneWebDavAccess(
     isReadOnlySecret() {
       return false;
     },
+    getViewEpoch() {
+      return `standalone:live:g0`;
+    },
+    bumpView() {
+      /* headless server has no REPL timeline */
+    },
   };
 }

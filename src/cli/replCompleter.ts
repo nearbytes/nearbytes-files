@@ -83,7 +83,7 @@ const PROFILE_SUB = ['add', 'use', 'list', 'ls', 'show', 'publish', 'remove', 'r
 const FRIEND_SUB = ['list', 'ls', 'add', 'remove', 'rm', 'del', 'delete', 'show'] as const;
 const VOLUME_SUB = ['add', 'use', 'forget', 'list', 'ls', 'open', 'close', 'info', 'show'] as const;
 const TIMELINE_SUB = ['goto', 'live', 'head'] as const;
-const WEBDAV_SUB = ['status', 'logout'] as const;
+const WEBDAV_SUB = ['status', 'refresh', 'logout'] as const;
 const MONITOR_SUB = ['on', 'off', 'start', 'stop'] as const;
 
 const SECRET_FLAGS = ['-s', '--secret'] as const;

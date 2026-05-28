@@ -1,6 +1,6 @@
 import type { Context } from './context.js';
 import { green, yellow, dim, bold, cyan } from './output.js';
-import { invalidateWebDavAuth } from '../webdav/access.js';
+import { bumpWebDavView, invalidateWebDavAuth } from '../webdav/access.js';
 import { profileWebDavPassword } from './volumeSessionStore.js';
 
 function formatWhen(ms: number | null): string {
@@ -69,6 +69,17 @@ export function cmdWebDavStatus(ctx: Context): void {
       yellow('  Timeline: historical cursor — WebDAV is read-only until `timeline live`'),
     );
   }
+}
+
+export function cmdWebDavRefresh(ctx: Context): void {
+  bumpWebDavView(ctx);
+  console.log(green('✓ WebDAV view epoch bumped — clients should refetch on next access'));
+  console.log(
+    dim(
+      '  macOS Finder: click the folder and press ⌘R (or close and reopen the window)\n' +
+        '  Windows: F5 in Explorer  ·  Linux (gvfs/Nautilus): F5 or remount',
+    ),
+  );
 }
 
 export function cmdWebDavLogout(ctx: Context): void {

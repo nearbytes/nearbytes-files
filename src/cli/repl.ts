@@ -79,7 +79,7 @@ import { cmdPeers, cmdMonitor, cmdWhoami } from './peersMonitor.js';
 import type { Context } from './context.js';
 import { restoreVolumeSession } from './volumeCommands.js';
 import { parseVolumeAddArgs, secretVolumePrefix } from './volumeSessionStore.js';
-import { cmdWebDavLogout, cmdWebDavStatus } from './webdavCommands.js';
+import { cmdWebDavLogout, cmdWebDavRefresh, cmdWebDavStatus } from './webdavCommands.js';
 import { createReplCompleter } from './replCompleter.js';
 import {
   loadReplHistory,
@@ -426,7 +426,11 @@ async function dispatch(ctx: Context, tokens: string[], rl: readline.Interface):
         cmdWebDavLogout(ctx);
         return;
       }
-      throw new Error('Usage: webdav status | webdav logout');
+      if (sub === 'refresh') {
+        cmdWebDavRefresh(ctx);
+        return;
+      }
+      throw new Error('Usage: webdav status | webdav refresh | webdav logout');
     }
 
     // ---- profile / friend ----

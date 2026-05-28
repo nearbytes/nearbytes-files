@@ -153,7 +153,7 @@ export function formatTimelineTable(events: readonly TimelineEvent[]): string {
       fmtDate(event.timestamp).padEnd(COL_WHEN) +
       formatTimelineType(event).padEnd(COL_TYPE) +
       whatCol.padEnd(colWhat) +
-      dim(event.eventHash.slice(0, 12) + '…')
+      dim(event.eventHash)
     );
   });
 

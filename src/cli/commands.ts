@@ -27,7 +27,7 @@ import {
   resetTimelineCursor,
 } from './volumeCommands.js';
 import { secretVolumePrefix } from './volumeSessionStore.js';
-import { findEventIndex } from '../fileEmit.js';
+import { findEventIndex, formatTimelineGotoIndexError } from '../fileEmit.js';
 import {
   resolveRemotePath,
   joinRemotePaths,
@@ -351,7 +351,7 @@ export async function cmdTimeline(ctx: Context, secret: string): Promise<void> {
   );
   console.log(
     dim(
-      'Use timeline goto <n|date|hash-prefix> to inspect history; timeline live returns to head.',
+      'Use timeline goto <n|date|hash> — numbers are event # from the table; hashes need ≥8 hex chars.',
     ),
   );
 
@@ -388,6 +388,9 @@ export async function cmdTimelineGoto(ctx: Context, selector: string): Promise<v
     ctx.lastTimelineEvents ?? (await ctx.fileService.getTimeline(secret));
 
   let idx = findEventIndex(replay.orderedEntries, selector);
+  if (idx === -2) {
+    throw new Error(formatTimelineGotoIndexError(selector, replay.orderedEntries, -2));
+  }
   if (idx < 0) {
     const instant = parseTimelineInstant(selector);
     if (instant !== null) {
@@ -395,8 +398,13 @@ export async function cmdTimelineGoto(ctx: Context, selector: string): Promise<v
       if (idx < 0) {
         throw new Error(`No event after ${selector}`);
       }
+    } else if (/^\d+$/.test(selector.trim().replace(/^#/, ''))) {
+      throw new Error(formatTimelineGotoIndexError(selector, replay.orderedEntries, -1));
     } else {
-      throw new Error(`Unknown timeline selector: ${selector}`);
+      throw new Error(
+        formatTimelineGotoIndexError(selector, replay.orderedEntries, -1) ||
+          `Unknown timeline selector: ${selector}`,
+      );
     }
   }
 
@@ -407,10 +415,8 @@ export async function cmdTimelineGoto(ctx: Context, selector: string): Promise<v
     ctx.timelineCursorHash = null;
     console.log(green('✓ Timeline cursor at live head'));
   } else {
-    console.log(
-      green(`✓ Timeline cursor at event #${idx + 1}`) +
-        dim(` (${hash.slice(0, 12)}…) — read-only view`),
-    );
+    console.log(green(`✓ Timeline cursor at event #${idx + 1} (read-only view)`));
+    console.log(dim(`  ${hash}`));
   }
 }
 
@@ -933,7 +939,7 @@ ${cyan('Volume connections')}
   setup <secret>                         Derive and display the public key for a secret
   info                                   Show active volume info
   timeline ${dim('[-s <secret>]')}                 Event audit log (causal replay order)
-  timeline goto <n|date>                 Read-only cursor: index or first event after date
+  timeline goto <#|date|hash>            Read-only cursor: event # first, then date, then ≥8 hex of hash
   timeline live                          Reset cursor to live head ${dim('(alias: timeline head)')}
   refresh                                Reload active volume state
 

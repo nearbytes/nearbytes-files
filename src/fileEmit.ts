@@ -181,20 +181,64 @@ export function replayContextThrough(
   };
 }
 
+const MIN_TIMELINE_HASH_PREFIX = 8;
+
+/**
+ * Resolve `timeline goto` selector: **event number first** (1-based), then hash prefix
+ * (hex, at least {@link MIN_TIMELINE_HASH_PREFIX} chars). Returns -1 if not index/hash.
+ */
 export function findEventIndex(
   orderedEntries: readonly EventLogEntry[],
   selector: string,
 ): number {
-  const trimmed = selector.trim();
-  const byHash = orderedEntries.findIndex(
-    (entry) => entry.eventHash === trimmed || entry.eventHash.startsWith(trimmed),
-  );
-  if (byHash >= 0) return byHash;
-  const n = Number.parseInt(trimmed, 10);
-  if (Number.isFinite(n) && n >= 1 && Number.isInteger(n) && n <= orderedEntries.length) {
-    return n - 1;
+  const trimmed = selector.trim().replace(/^#/, '');
+  if (trimmed.length === 0) return -1;
+
+  if (/^\d+$/.test(trimmed)) {
+    const n = Number.parseInt(trimmed, 10);
+    if (n >= 1 && n <= orderedEntries.length) return n - 1;
+    return -1;
   }
+
+  if (/^[0-9a-fA-F]+$/.test(trimmed) && trimmed.length >= MIN_TIMELINE_HASH_PREFIX) {
+    const lower = trimmed.toLowerCase();
+    let match = -1;
+    for (let i = 0; i < orderedEntries.length; i++) {
+      const h = orderedEntries[i]!.eventHash.toLowerCase();
+      if (h === lower || h.startsWith(lower)) {
+        if (match >= 0) return -2;
+        match = i;
+      }
+    }
+    return match;
+  }
+
   return -1;
+}
+
+export function formatTimelineGotoIndexError(
+  selector: string,
+  orderedEntries: readonly EventLogEntry[],
+  code: number,
+): string {
+  const trimmed = selector.trim().replace(/^#/, '');
+  if (/^\d+$/.test(trimmed)) {
+    const n = Number.parseInt(trimmed, 10);
+    return `Event #${n} is out of range (timeline has ${orderedEntries.length} event(s), use 1–${orderedEntries.length})`;
+  }
+  if (/^[0-9a-fA-F]+$/.test(trimmed) && trimmed.length < MIN_TIMELINE_HASH_PREFIX) {
+    return `Hash prefix "${trimmed}" is too short — use at least ${MIN_TIMELINE_HASH_PREFIX} hex characters, or an event number (e.g. 32)`;
+  }
+  if (code === -2) {
+    const lower = trimmed.toLowerCase();
+    const nums: number[] = [];
+    for (let i = 0; i < orderedEntries.length; i++) {
+      const h = orderedEntries[i]!.eventHash.toLowerCase();
+      if (h === lower || h.startsWith(lower)) nums.push(i + 1);
+    }
+    return `Ambiguous hash prefix "${trimmed}" (events #${nums.join(', #')}) — paste more of the hash`;
+  }
+  return `No event with hash prefix "${trimmed}"`;
 }
 
 /**

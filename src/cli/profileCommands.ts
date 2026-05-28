@@ -25,6 +25,7 @@ import {
 import { green, dim, bold, cyan, yellow } from './output.js';
 import type { Context } from './context.js';
 import { persistConfig } from './configStore.js';
+import { invalidateWebDavAuth } from '../webdav/access.js';
 
 function findProfileByName(
   ctx: Context,
@@ -114,7 +115,9 @@ export async function cmdProfileUse(ctx: Context, name: string): Promise<void> {
     return;
   }
   await persistConfig(ctx, { ...ctx.config, activeProfile: trimmed });
+  invalidateWebDavAuth(ctx);
   console.log(green(`✓ Active profile is now "${trimmed}"`));
+  console.log(dim('  WebDAV clients must authenticate again (global Basic auth).'));
   console.log(
     dim(
       '  Sync continues to serve every profile in `profiles[]`; only writes and outbound dials use the active one.',

@@ -49,6 +49,11 @@ import {
   cmdCd,
   cmdRefresh,
   cmdTimeline,
+  cmdTimelineGoto,
+  cmdTimelineLive,
+  cmdVolumeAdd,
+  cmdVolumeForget,
+  cmdVolumeList,
   cmdHelp,
   cmdFriendList,
   cmdFriendAdd,
@@ -72,6 +77,8 @@ import {
 } from './commands.js';
 import { cmdPeers, cmdMonitor, cmdWhoami } from './peersMonitor.js';
 import type { Context } from './context.js';
+import { restoreVolumeSession } from './volumeCommands.js';
+import { secretVolumePrefix } from './volumeSessionStore.js';
 import { createReplCompleter } from './replCompleter.js';
 import {
   loadReplHistory,
@@ -316,10 +323,6 @@ async function dispatch(ctx: Context, tokens: string[], rl: readline.Interface):
       const [secret] = rest;
       if (!secret) throw new Error('Usage: open <secret>');
       await cmdVolumeOpen(ctx, secret);
-      const lastKey = [...ctx.volumes.keys()].at(-1);
-      if (lastKey !== undefined) {
-        ctx.activeVolume = ctx.volumes.get(lastKey) ?? null;
-      }
       return;
     }
 
@@ -352,10 +355,20 @@ async function dispatch(ctx: Context, tokens: string[], rl: readline.Interface):
         const [secret] = subargs.length > 0 ? subargs : rest;
         if (!secret) throw new Error('Usage: volume open <secret>');
         await cmdVolumeOpen(ctx, secret);
-        const lastKey = [...ctx.volumes.keys()].at(-1);
-        if (lastKey !== undefined) {
-          ctx.activeVolume = ctx.volumes.get(lastKey) ?? null;
-        }
+      } else if (subverb === 'add') {
+        const [name, secret] = subargs;
+        if (!name || !secret) throw new Error('Usage: volume add <name> <secret>');
+        await cmdVolumeAdd(ctx, name, secret);
+      } else if (subverb === 'use') {
+        const [name] = subargs;
+        if (!name) throw new Error('Usage: volume use <name>');
+        await cmdUse(ctx, name);
+      } else if (subverb === 'forget') {
+        const [name] = subargs;
+        if (!name) throw new Error('Usage: volume forget <name>');
+        await cmdVolumeForget(ctx, name);
+      } else if (subverb === 'list' || subverb === 'ls') {
+        await cmdVolumeList(ctx);
       } else if (subverb === 'close') {
         await cmdClose(ctx);
       } else if (subverb === 'info' || subverb === 'show') {
@@ -375,8 +388,26 @@ async function dispatch(ctx: Context, tokens: string[], rl: readline.Interface):
       return;
 
     case 'timeline': {
+      const [sub, ...subrest] = rest;
+      if (sub === 'goto') {
+        const [selector] = subrest;
+        if (!selector) throw new Error('Usage: timeline goto <n|date|event-hash>');
+        await cmdTimelineGoto(ctx, selector);
+        return;
+      }
+      if (sub === 'live' || sub === 'head') {
+        await cmdTimelineLive(ctx);
+        return;
+      }
       const { secret } = extractFlags(rest);
       await cmdTimeline(ctx, resolveSecret(ctx, secret));
+      return;
+    }
+
+    case 'forget': {
+      const [name] = rest;
+      if (!name) throw new Error('Usage: forget <volume-name>');
+      await cmdVolumeForget(ctx, name);
       return;
     }
 
@@ -570,15 +601,15 @@ export async function startRepl(ctx: Context, opts: StartReplOptions = {}): Prom
   }
   console.log('');
 
-  for (const vc of ctx.config.volumes) {
-    try {
-      await cmdVolumeOpen(ctx, vc.secret);
-      const lastKey = [...ctx.volumes.keys()].at(-1);
-      if (lastKey !== undefined) {
-        ctx.activeVolume = ctx.volumes.get(lastKey) ?? null;
+  await restoreVolumeSession(ctx);
+  if (ctx.volumeRegistry.size === 0) {
+    for (const vc of ctx.config.volumes) {
+      try {
+        const name = secretVolumePrefix(vc.secret);
+        await cmdVolumeAdd(ctx, name, vc.secret);
+      } catch {
+        // Non-fatal — volume may not exist on disk yet.
       }
-    } catch {
-      // Non-fatal — volume may not exist on disk yet.
     }
   }
 

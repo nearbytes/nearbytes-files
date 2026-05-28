@@ -48,6 +48,7 @@ import {
   extendFileReplayContext,
   type CausalLineage,
   loadFileReplayContext,
+  replayContextThrough,
   lineagesForRename,
   lineageAtPath,
 } from './fileEmit.js';
@@ -221,9 +222,15 @@ export interface FileService {
    */
   getFile(secret: string, blobHash: string): Promise<Buffer>;
   getFileByPath(secret: string, path: string): Promise<Buffer>;
+  /** Read file bytes from a specific replay snapshot (e.g. historical timeline cursor). */
+  readFileAtReplay(
+    secret: string,
+    path: string,
+    replay: import('./fileEmit.js').FileReplayContext,
+  ): Promise<Buffer>;
   getReplayContext(
     secret: string,
-    opts?: { readonly enrichSizes?: boolean },
+    opts?: { readonly enrichSizes?: boolean; readonly throughEventHash?: string },
   ): Promise<import('./fileEmit.js').FileReplayContext>;
   /** Drop in-memory replay; next read reloads from storage (e.g. after external sync). */
   markReplayStale(secret: string): void;
@@ -299,23 +306,34 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
 
   const getReplayContext = async (
     secret: string,
-    opts?: { readonly enrichSizes?: boolean },
+    opts?: { readonly enrichSizes?: boolean; readonly throughEventHash?: string },
   ): Promise<import('./fileEmit.js').FileReplayContext> => {
     const normalizedSecret = normalizeSecret(secret) as unknown as string;
+    const through = opts?.throughEventHash;
     const state = replayCache.get(normalizedSecret);
-    if (state !== undefined) {
-      if (!state.stale && state.context !== undefined) return state.context;
-      if (state.pending !== undefined) return state.pending;
+    if (through !== undefined && state?.context !== undefined && !state.stale) {
+      return replayContextThrough(state.context, through, { enrichSizes: opts?.enrichSizes === true });
     }
-    const seed = state?.stale ? state.context : undefined;
+    if (through === undefined) {
+      if (state !== undefined) {
+        if (!state.stale && state.context !== undefined) return state.context;
+        if (state.pending !== undefined) return state.pending;
+      }
+    }
+    const seed = through === undefined && state?.stale ? state.context : undefined;
     const pending = loadFileReplayContext(normalizedSecret, dependencies.crypto, channelStorage, {
       seed,
       enrichSizes: opts?.enrichSizes === true,
+      throughEventHash: through,
     }).then((context) => {
-      replayCache.set(normalizedSecret, { context, stale: false });
+      if (through === undefined) {
+        replayCache.set(normalizedSecret, { context, stale: false });
+      }
       return context;
     });
-    replayCache.set(normalizedSecret, { context: state?.context, pending, stale: false });
+    if (through === undefined) {
+      replayCache.set(normalizedSecret, { context: state?.context, pending, stale: false });
+    }
     return pending;
   };
 
@@ -394,6 +412,24 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
       getFileWithDeps(secret, blobHash, dependencies.crypto, channelStorage, getReplayContext),
     getFileByPath: async (secret, path) =>
       getFileByPathWithDeps(secret, path, dependencies.crypto, channelStorage, getReplayContext),
+    readFileAtReplay: async (secret, path, replay) => {
+      const normalizedSecret = normalizeSecret(secret);
+      const currentFile = replay.fs.files.get(path);
+      if (currentFile === undefined) {
+        throw new DecryptionError('File is not available in the active volume');
+      }
+      const encryptedKey = replay.liveEncryptedKeys.get(path);
+      if (encryptedKey === undefined) {
+        throw new DecryptionError('File key is not available in the active volume');
+      }
+      return decryptStoredFile(
+        normalizedSecret,
+        currentFile.blobHash,
+        encryptedKey,
+        dependencies.crypto,
+        channelStorage,
+      );
+    },
     getReplayContext: async (secret, opts) => getReplayContext(secret, opts),
     markReplayStale: (secret) => markReplayStale(secret),
     computeSnapshot: async (secret) =>

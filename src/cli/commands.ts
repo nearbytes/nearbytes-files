@@ -18,7 +18,16 @@ import { basename, join, resolve } from 'path';
 import { expandUserPath } from './paths.js';
 import { createSecret, bytesToHex } from 'nearbytes-crypto';
 import { green, yellow, red, cyan, dim, bold, formatFileTable, formatTimelineTable } from './output.js';
-import { type Context, openAndWatch, refreshIfOpen } from './context.js';
+import { assertTimelineWritesAllowed, type Context, refreshIfOpen } from './context.js';
+import {
+  cmdVolumeAdd,
+  cmdVolumeForget,
+  cmdVolumeList,
+  cmdVolumeUse,
+  resetTimelineCursor,
+} from './volumeCommands.js';
+import { secretVolumePrefix } from './volumeSessionStore.js';
+import { findEventIndex } from '../fileEmit.js';
 import {
   resolveRemotePath,
   joinRemotePaths,
@@ -42,13 +51,19 @@ export async function cmdSetup(ctx: Context, secret: string): Promise<void> {
 // volume open / info / use
 // ---------------------------------------------------------------------------
 
-/** Open a volume, materialise its state, and print a summary. */
+/** Open a volume, register it, activate, and print a summary. */
 export async function cmdVolumeOpen(
   ctx: Context,
   secret: string,
   watch = true,
 ): Promise<void> {
-  const rv = await openAndWatch(ctx, secret, watch);
+  const name = secretVolumePrefix(secret);
+  if (!ctx.volumeRegistry.has(name)) {
+    await cmdVolumeAdd(ctx, name, secret);
+  }
+  await cmdVolumeUse(ctx, name);
+  const rv = ctx.activeVolume;
+  if (rv === null) throw new Error('Failed to activate volume');
   const files = await ctx.fileService.listFiles(secret);
   const keyHex = bytesToHex(rv.volume.publicKey);
   console.log(green('✓ Volume opened'));
@@ -58,6 +73,7 @@ export async function cmdVolumeOpen(
     console.log('');
     console.log(formatFileTable(files));
   }
+  void watch;
 }
 
 /** Print info for the currently-active volume. */
@@ -71,28 +87,12 @@ export async function cmdVolumeInfo(ctx: Context): Promise<void> {
   console.log(`${bold('Files:')}      ${state.files.size}`);
 }
 
-/** Set the active volume by public-key hex prefix or secret. */
-export async function cmdUse(ctx: Context, keyPrefixOrSecret: string): Promise<void> {
-  // First try exact or prefix match against already-open volumes.
-  let rv = ctx.volumes.get(keyPrefixOrSecret);
-  if (!rv) {
-    for (const [key, vol] of ctx.volumes) {
-      if (key.startsWith(keyPrefixOrSecret)) {
-        rv = vol;
-        break;
-      }
-    }
-  }
-  // Fall back to treating the argument as a secret and opening the volume.
-  if (!rv) rv = await openAndWatch(ctx, keyPrefixOrSecret);
-
-  const switching = ctx.activeVolume !== rv;
-  ctx.activeVolume = rv;
-  // Reset remote cwd on volume switch — paths from the old volume have no
-  // meaning in the new one. Single-volume re-`use` is a no-op for cwd.
-  if (switching) ctx.remoteCwd = '';
-  console.log(green(`✓ Active volume: ${bytesToHex(rv.volume.publicKey)}`));
+/** Set the active registered volume by name. */
+export async function cmdUse(ctx: Context, name: string): Promise<void> {
+  await cmdVolumeUse(ctx, name);
 }
+
+export { cmdVolumeAdd, cmdVolumeForget, cmdVolumeList };
 
 // ---------------------------------------------------------------------------
 // file add (put)
@@ -104,6 +104,7 @@ export async function cmdFileAdd(
   secret: string,
   remoteSpec?: string,
 ): Promise<void> {
+  assertTimelineWritesAllowed(ctx);
   const resolvedLocal = expandUserPath(filePath);
   const localName = basename(resolvedLocal);
   if (!localName || localName.trim().length === 0) {
@@ -258,6 +259,7 @@ export async function cmdFileRemove(
   target: string,
   secret: string,
 ): Promise<void> {
+  assertTimelineWritesAllowed(ctx);
   const path = resolveRemotePath(ctx.remoteCwd, target);
   await ctx.fileService.delete(secret, path);
 
@@ -276,6 +278,7 @@ export async function cmdMkdir(
   target: string,
   secret: string,
 ): Promise<void> {
+  assertTimelineWritesAllowed(ctx);
   const path = resolveRemotePath(ctx.remoteCwd, target);
   const meta = await ctx.fileService.mkdir(secret, path);
 
@@ -325,12 +328,19 @@ export async function cmdCd(
 /** Show the volume event timeline (audit log of creates, deletes, renames, …). */
 export async function cmdTimeline(ctx: Context, secret: string): Promise<void> {
   const events = await ctx.fileService.getTimeline(secret);
+  ctx.lastTimelineEvents = events;
   if (events.length === 0) {
     console.log(yellow('  (no events in this volume yet)'));
     return;
   }
 
+  const cursorNote =
+    ctx.timelineCursorHash !== null
+      ? dim(`  Cursor: event #${eventNumberForHash(events, ctx.timelineCursorHash) ?? '?'} (read-only until timeline live)`)
+      : dim('  Cursor: live head');
+
   console.log(green(`✓ Timeline — ${events.length} event(s)`));
+  console.log(cursorNote);
   console.log('');
   console.log(formatTimelineTable(events));
   console.log('');
@@ -341,11 +351,72 @@ export async function cmdTimeline(ctx: Context, secret: string): Promise<void> {
   );
   console.log(
     dim(
-      'Raw events on disk are sorted by event hash; the timeline above is the causal replay order.',
+      'Use timeline goto <n|date|hash-prefix> to inspect history; timeline live returns to head.',
     ),
   );
 
   await refreshIfOpen(ctx, secret);
+}
+
+function eventNumberForHash(
+  events: readonly { eventHash: string }[],
+  hash: string,
+): number | null {
+  const idx = events.findIndex((e) => e.eventHash === hash || e.eventHash.startsWith(hash));
+  return idx >= 0 ? idx + 1 : null;
+}
+
+function parseTimelineInstant(selector: string): number | null {
+  const trimmed = selector.trim();
+  const asNum = Number(trimmed);
+  if (Number.isFinite(asNum) && trimmed.length >= 10 && !trimmed.includes('-')) {
+    return asNum;
+  }
+  const parsed = Date.parse(trimmed);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/** Move timeline cursor (read-only historical view). */
+export async function cmdTimelineGoto(ctx: Context, selector: string): Promise<void> {
+  if (!ctx.activeVolume || ctx.volumeSessionActive === null) {
+    throw new Error('No active volume — use `volume use <name>` first');
+  }
+  const secret = ctx.volumeRegistry.get(ctx.volumeSessionActive);
+  if (secret === undefined) throw new Error('Active volume is not registered');
+  const replay = await ctx.fileService.getReplayContext(secret);
+  const events =
+    ctx.lastTimelineEvents ?? (await ctx.fileService.getTimeline(secret));
+
+  let idx = findEventIndex(replay.orderedEntries, selector);
+  if (idx < 0) {
+    const instant = parseTimelineInstant(selector);
+    if (instant !== null) {
+      idx = events.findIndex((e) => e.timestamp > instant);
+      if (idx < 0) {
+        throw new Error(`No event after ${selector}`);
+      }
+    } else {
+      throw new Error(`Unknown timeline selector: ${selector}`);
+    }
+  }
+
+  const hash = replay.orderedEntries[idx]!.eventHash;
+  ctx.timelineCursorHash = hash;
+  const atHead = idx === replay.orderedEntries.length - 1;
+  if (atHead) {
+    ctx.timelineCursorHash = null;
+    console.log(green('✓ Timeline cursor at live head'));
+  } else {
+    console.log(
+      green(`✓ Timeline cursor at event #${idx + 1}`) +
+        dim(` (${hash.slice(0, 12)}…) — read-only view`),
+    );
+  }
+}
+
+export async function cmdTimelineLive(ctx: Context): Promise<void> {
+  resetTimelineCursor(ctx);
+  console.log(green('✓ Timeline cursor at live head'));
 }
 
 // ---------------------------------------------------------------------------
@@ -369,6 +440,7 @@ export async function cmdRename(
   toSpec: string,
   secret: string,
 ): Promise<void> {
+  assertTimelineWritesAllowed(ctx);
   const fromPath = resolveRemotePath(ctx.remoteCwd, fromSpec);
 
   /**

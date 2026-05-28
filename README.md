@@ -118,7 +118,7 @@ Starting the REPL also starts the local HTTPS WebDAV server (requires an **activ
 yarn repl
 ```
 
-**v2 mount (specified; rolling out in `nbf`):** one Finder mount for all registered volumes:
+**v2 mount:** one Finder mount for all registered volumes:
 
 ```text
 https://127.0.0.1:9843/
@@ -131,7 +131,7 @@ https://127.0.0.1:9843/
 3. Connect to `https://127.0.0.1:9843/` with **global** HTTP Basic (tied to the active profile; re-auth after `profile use`).
 4. Only registered volume names appear; channels without a registered secret are never listed.
 
-**v1 (current code):** per-volume mount `https://127.0.0.1:9843/<volume>/` with Basic `username=<volume>`, `password=<secret-part>`.
+**Legacy v1 per-volume URLs** are no longer served by the REPL listener; use the single root above.
 
 The server binds to `127.0.0.1` with a local self-signed certificate. On macOS use **Go → Connect to Server…**.
 

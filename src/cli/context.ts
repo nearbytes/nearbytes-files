@@ -22,6 +22,14 @@ export interface Context {
   activeVolume: ReactiveVolume | null;
   readonly volumes: Map<string, ReactiveVolume>;
   readonly watchers: Map<string, VolumeWatcher>;
+  /** Registered volume name → channel secret (`volume-session.json`). */
+  readonly volumeRegistry: Map<string, string>;
+  volumeSessionActive: string | null;
+  /** Historical timeline cursor on the active volume (null = live head). */
+  timelineCursorHash: string | null;
+  lastTimelineEvents: import('../fileService.js').TimelineEvent[] | null;
+  webdavAuthGeneration: number;
+  webdavAuthenticatedGeneration: number | null;
   /**
    * Current "remote working directory" inside the active volume — used by
    * FTP-style commands so users can `cd notes/2026 && ls`. Empty string
@@ -49,34 +57,47 @@ export async function createContext(
   const volumes = new Map<string, ReactiveVolume>();
   const watchers = new Map<string, VolumeWatcher>();
 
-  let webdav: WebDavServer | null = null;
+  const ctx: Context = {
+    config,
+    skeleton,
+    fileService,
+    webdav: null,
+    activeVolume: null,
+    volumes,
+    watchers,
+    volumeRegistry: new Map<string, string>(),
+    volumeSessionActive: null,
+    timelineCursorHash: null,
+    lastTimelineEvents: null,
+    webdavAuthGeneration: 0,
+    webdavAuthenticatedGeneration: null,
+    remoteCwd: '',
+
+    async destroy(): Promise<void> {
+      if (ctx.webdav !== null) await ctx.webdav.close();
+      for (const w of ctx.watchers.values()) w.close();
+      ctx.watchers.clear();
+      await skeleton.destroy();
+    },
+  };
+
   if (options?.webdav === true) {
     const { startWebDavServer } = await import('../webdav/index.js');
-    webdav = await startWebDavServer({
+    const { createWebDavAccess } = await import('../webdav/access.js');
+    ctx.webdav = await startWebDavServer({
       fileService,
-      crypto: skeleton.crypto,
-      log: skeleton.log,
+      access: createWebDavAccess(ctx),
       port: options.webdavPort,
     });
   }
 
-  return {
-    config,
-    skeleton,
-    fileService,
-    webdav,
-    activeVolume: null,
-    volumes,
-    watchers,
-    remoteCwd: '',
+  return ctx;
+}
 
-    async destroy(): Promise<void> {
-      if (webdav !== null) await webdav.close();
-      for (const w of watchers.values()) w.close();
-      watchers.clear();
-      await skeleton.destroy();
-    },
-  };
+export function assertTimelineWritesAllowed(ctx: Context): void {
+  if (ctx.timelineCursorHash !== null) {
+    throw new Error('Timeline is not at live head — run `timeline live` before mutating files');
+  }
 }
 
 export async function openAndWatch(

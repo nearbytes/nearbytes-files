@@ -115,7 +115,15 @@ async function runRepl(): Promise<void> {
     { webdav: true, webdavPort: parseWebDavPort(opts.webdavPort) },
   );
   if (ctx.webdav !== null) {
-    console.error(`WebDAV: ${ctx.webdav.baseUrl}/<volume>/ (Basic user=<volume> password=<secret>)`);
+    const profile = ctx.config.activeProfile;
+    console.error(`WebDAV: ${ctx.webdav.baseUrl}/ (registered volumes at root)`);
+    if (profile !== null) {
+      console.error(
+        `  Basic user=${profile} password=<profile-secret-password-part> — re-auth after profile use`,
+      );
+    } else {
+      console.error('  Requires an active profile (profile add / profile use) before serving paths');
+    }
   }
   await startRepl(ctx, {
     autoMonitor: opts.monitor === true,

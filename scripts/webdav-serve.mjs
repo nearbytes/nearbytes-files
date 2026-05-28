@@ -10,6 +10,8 @@ import { readFileSync } from 'node:fs';
 import { createFilesystemSkeletonFromConfig } from 'nearbytes-skeleton';
 import { applyDebugOption, parseWebDavPort } from '../dist/debug.js';
 import { createFileService } from '../dist/fileService.js';
+import { loadVolumeSession } from '../dist/cli/volumeSessionStore.js';
+import { createStandaloneWebDavAccess } from '../dist/webdav/standaloneAccess.js';
 import { startWebDavServer } from '../dist/webdav/index.js';
 
 function parseArgs(argv) {
@@ -44,13 +46,14 @@ const port = parseWebDavPort(webdavPort);
 
 const skeleton = await createFilesystemSkeletonFromConfig(config);
 const fileService = createFileService({ log: skeleton.log, crypto: skeleton.crypto });
+const session = await loadVolumeSession(config.dataDir);
+const registry = new Map(session.volumes.map((v) => [v.name, v.secret]));
 const server = await startWebDavServer({
   fileService,
-  crypto: skeleton.crypto,
-  log: skeleton.log,
+  access: createStandaloneWebDavAccess(config, registry),
   port,
 });
-console.error(`WebDAV listening ${server.baseUrl}/<volume>/`);
+console.error(`WebDAV listening ${server.baseUrl}/ (${registry.size} registered volume(s))`);
 
 const shutdown = async () => {
   await server.close();

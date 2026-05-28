@@ -87,6 +87,8 @@ export interface LoadFileReplayContextOptions {
   readonly seed?: FileReplayContext;
   /** Decrypt live blobs to fill `FileMetadata.size` (WebDAV PROPFIND). */
   readonly enrichSizes?: boolean;
+  /** Materialize only through this event hash (prefix replay; read-only views). */
+  readonly throughEventHash?: string;
 }
 
 export async function loadFileReplayContext(
@@ -95,7 +97,7 @@ export async function loadFileReplayContext(
   log: Log,
   options: LoadFileReplayContextOptions = {},
 ): Promise<FileReplayContext> {
-  const { seed, enrichSizes = false } = options;
+  const { seed, enrichSizes = false, throughEventHash } = options;
   const timing = debugEnabled('timing');
   const started = timing ? performance.now() : 0;
   const volume = await openChannel(createSecret(secret), crypto);
@@ -135,12 +137,64 @@ export async function loadFileReplayContext(
   const finalFs = enrichSizes
     ? await enrichLiveFileSizes(sizedFs, liveEncryptedKeys, createSecret(secret), crypto, log)
     : sizedFs;
-  return {
+  const base: FileReplayContext = {
     fs: finalFs,
     observedHead: head !== undefined ? createHash(head) : undefined,
     orderedEntries,
     liveEncryptedKeys,
   };
+  if (throughEventHash !== undefined) {
+    return replayContextThrough(base, throughEventHash, { enrichSizes });
+  }
+  return base;
+}
+
+/**
+ * Prefix replay through an inclusive cursor event (historical read-only views).
+ */
+export function replayContextThrough(
+  replay: FileReplayContext,
+  throughEventHash: string,
+  options: { readonly enrichSizes?: boolean } = {},
+): FileReplayContext {
+  const idx = findEventIndex(replay.orderedEntries, throughEventHash);
+  if (idx < 0) {
+    throw new Error(`Timeline cursor not found: ${throughEventHash}`);
+  }
+  const orderedEntries = replay.orderedEntries.slice(0, idx + 1);
+  const fs = runMaterialization(toCanonicalEntriesFromOrdered(orderedEntries));
+  const liveEncryptedKeys = new Map<string, EncryptedData>();
+  for (const [path, originHash] of fs.fileOrigins) {
+    const wrapped = entryWrappedKey(orderedEntries, originHash);
+    if (wrapped !== undefined) liveEncryptedKeys.set(path, wrapped);
+  }
+  const head = observedLogHeadFromOrdered(orderedEntries);
+  let sizedFs = applyCachedBlobSizes(fs);
+  if (options.enrichSizes === true) {
+    // enrichSizes path needs crypto+log; callers using historical WebDAV pass false or handle upstream
+  }
+  return {
+    fs: sizedFs,
+    observedHead: head !== undefined ? createHash(head) : undefined,
+    orderedEntries,
+    liveEncryptedKeys,
+  };
+}
+
+export function findEventIndex(
+  orderedEntries: readonly EventLogEntry[],
+  selector: string,
+): number {
+  const trimmed = selector.trim();
+  const byHash = orderedEntries.findIndex(
+    (entry) => entry.eventHash === trimmed || entry.eventHash.startsWith(trimmed),
+  );
+  if (byHash >= 0) return byHash;
+  const n = Number.parseInt(trimmed, 10);
+  if (Number.isFinite(n) && n >= 1 && Number.isInteger(n) && n <= orderedEntries.length) {
+    return n - 1;
+  }
+  return -1;
 }
 
 /**

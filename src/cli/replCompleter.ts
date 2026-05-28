@@ -54,6 +54,7 @@ const TOP_LEVEL = [
   'open',
   'close',
   'use',
+  'forget',
   'volumes',
   'setup',
   'info',
@@ -79,7 +80,8 @@ const TOP_LEVEL = [
 
 const PROFILE_SUB = ['add', 'use', 'list', 'ls', 'show', 'publish', 'remove', 'rm'] as const;
 const FRIEND_SUB = ['list', 'ls', 'add', 'remove', 'rm', 'del', 'delete', 'show'] as const;
-const VOLUME_SUB = ['open', 'close', 'info', 'show'] as const;
+const VOLUME_SUB = ['add', 'use', 'forget', 'list', 'ls', 'open', 'close', 'info', 'show'] as const;
+const TIMELINE_SUB = ['goto', 'live', 'head'] as const;
 const MONITOR_SUB = ['on', 'off', 'start', 'stop'] as const;
 
 const SECRET_FLAGS = ['-s', '--secret'] as const;
@@ -164,10 +166,6 @@ function knownSecrets(ctx: Context): string[] {
     out.add(rv.volume.secret as string);
   }
   return [...out].map(quoteIfNeeded);
-}
-
-function volumeKeyPrefixes(ctx: Context): string[] {
-  return [...ctx.volumes.keys()].map((hex) => hex.slice(0, 16));
 }
 
 function activeFileNames(ctx: Context): string[] {
@@ -443,10 +441,15 @@ function suggestForFlatVerb(
       return filterByPartial(knownSecrets(ctx), partial);
 
     case 'use':
-      return filterByPartial([...volumeKeyPrefixes(ctx), ...knownSecrets(ctx)], partial);
+    case 'forget':
+      return filterByPartial([...ctx.volumeRegistry.keys()], partial);
 
-    case 'timeline':
+    case 'timeline': {
+      const sub = argsAfterVerb[0]?.toLowerCase();
+      if (!sub) return filterByPartial([...TIMELINE_SUB], partial);
+      if (sub === 'goto') return filterByPartial([], partial);
       return filterByPartial(knownSecrets(ctx), partial);
+    }
 
     default:
       // Fallback: try the legacy remote-name list for forward compatibility.
@@ -497,10 +500,14 @@ function suggest(ctx: Context, prefix: string[], partial: string): string[] {
     }
 
     case 'volume': {
-      const [sub] = rest;
+      const [sub, name] = rest;
       if (!sub) return filterByPartial([...VOLUME_SUB], partial);
       const lowerSub = sub.toLowerCase();
-      if (lowerSub === 'open') return filterByPartial(knownSecrets(ctx), partial);
+      if (lowerSub === 'open' || lowerSub === 'add') return filterByPartial(knownSecrets(ctx), partial);
+      if (lowerSub === 'use' || lowerSub === 'forget') {
+        return filterByPartial([...ctx.volumeRegistry.keys()], partial);
+      }
+      if (lowerSub === 'add' && name) return filterByPartial(knownSecrets(ctx), partial);
       return [];
     }
 

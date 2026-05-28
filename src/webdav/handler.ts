@@ -2,31 +2,27 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import type { FileService } from '../fileService.js';
-import type { MaterializedFileSystem } from '../fileMaterializer.js';
+import type { FileReplayContext } from '../fileEmit.js';
 import { normalizeVolumePath } from '../pathUtils.js';
-import { credentialsFromRequest } from './auth.js';
+import type { WebDavAccess } from './access.js';
 import { debugEnabled } from '../debug.js';
 import { lockDiscovery, multistatus, responseHref } from './xml.js';
 
 export interface WebDavHandlerDeps {
   readonly fileService: FileService;
+  readonly access: WebDavAccess;
   readonly etagForPath: (secret: string, path: string) => Promise<string | undefined>;
-  readonly snapshotForSecret: (
-    secret: string,
-  ) => Promise<{
-    readonly fs: MaterializedFileSystem;
-    readonly observedHead?: string;
-    readonly liveEncryptedKeys: ReadonlyMap<string, Uint8Array>;
-  }>;
+  readonly snapshotForSecret: (secret: string) => Promise<FileReplayContext>;
   readonly readFileFromSnapshot: (
     secret: string,
     path: string,
-    snapshot: {
-      readonly fs: MaterializedFileSystem;
-      readonly liveEncryptedKeys: ReadonlyMap<string, Uint8Array>;
-    },
+    snapshot: FileReplayContext,
   ) => Promise<Buffer>;
 }
+
+type ParsedPath =
+  | { readonly kind: 'root' }
+  | { readonly kind: 'volume'; readonly volume: string; readonly inner: string };
 
 function send(
   res: ServerResponse,
@@ -50,14 +46,20 @@ function unauthorized(res: ServerResponse): void {
   send(res, 401, undefined, { 'WWW-Authenticate': 'Basic realm="nearbytes-files"' });
 }
 
-function parseUrl(req: IncomingMessage): { volume: string; inner: string } | null {
+function serviceUnavailable(res: ServerResponse, message: string): void {
+  send(res, 503, message, { 'Content-Type': 'text/plain; charset=utf-8' });
+}
+
+function parseUrl(req: IncomingMessage): ParsedPath | null {
   const url = new URL(req.url ?? '/', 'https://localhost');
   const segments = url.pathname.split('/').filter((s) => s.length > 0);
-  if (segments.length === 0) return null;
-  const decodedSegments = segments.map((segment) => decodeURIComponent(segment));
-  const volume = decodedSegments[0]!;
-  const inner = decodedSegments.length > 1 ? normalizeVolumePath(decodedSegments.slice(1).join('/')) : '';
-  return { volume, inner };
+  if (segments.length === 0) return { kind: 'root' };
+  const volume = decodeURIComponent(segments[0]!);
+  const inner =
+    segments.length > 1
+      ? normalizeVolumePath(segments.slice(1).map((s) => decodeURIComponent(s)).join('/'))
+      : '';
+  return { kind: 'volume', volume, inner };
 }
 
 function debugStage(
@@ -73,26 +75,26 @@ function debugStage(
   );
 }
 
-function debugRequest(req: IncomingMessage, inner: string): void {
+function debugRequest(req: IncomingMessage, label: string): void {
   if (!debugEnabled('webdav')) return;
   const depth = Array.isArray(req.headers.depth) ? req.headers.depth[0] : req.headers.depth;
   const destination = Array.isArray(req.headers.destination)
     ? req.headers.destination[0]
     : req.headers.destination;
   console.error(
-    `[nearbytes-webdav] ${new Date().toISOString()} ${req.method ?? 'UNKNOWN'} ${req.url ?? '/'} path=${JSON.stringify(inner)}` +
+    `[nearbytes-webdav] ${new Date().toISOString()} ${req.method ?? 'UNKNOWN'} ${req.url ?? '/'} path=${JSON.stringify(label)}` +
       (depth !== undefined ? ` depth=${depth}` : '') +
       (destination !== undefined ? ` destination=${destination}` : ''),
   );
 }
 
-function debugResponse(req: IncomingMessage, res: ServerResponse, inner: string): void {
+function debugResponse(req: IncomingMessage, res: ServerResponse, label: string): void {
   if (!debugEnabled('webdav')) return;
   const started = performance.now();
   res.once('finish', () => {
     const elapsed = Math.round((performance.now() - started) * 10) / 10;
     console.error(
-      `[nearbytes-webdav] ${new Date().toISOString()} -> ${res.statusCode} ${req.method ?? 'UNKNOWN'} path=${JSON.stringify(inner)} ${elapsed}ms`,
+      `[nearbytes-webdav] ${new Date().toISOString()} -> ${res.statusCode} ${req.method ?? 'UNKNOWN'} path=${JSON.stringify(label)} ${elapsed}ms`,
     );
   });
 }
@@ -106,7 +108,8 @@ function isBrowserProbe(req: IncomingMessage): boolean {
   );
 }
 
-function hrefFor(volume: string, inner: string): string {
+function hrefFor(volume: string | null, inner: string): string {
+  if (volume === null) return '/';
   const encoded = inner.length > 0 ? `/${inner.split('/').map(encodeURIComponent).join('/')}` : '';
   return `/${encodeURIComponent(volume)}${encoded}`;
 }
@@ -129,13 +132,26 @@ function isDirectChild(parent: string, path: string): boolean {
   return !path.slice(parent.length + 1).includes('/');
 }
 
+function ensureWebDavReady(
+  access: WebDavAccess,
+  req: IncomingMessage,
+  res: ServerResponse,
+): boolean {
+  if (access.getActiveProfile() === null) {
+    serviceUnavailable(res, 'No active sync profile — run profile add / profile use in nbf first');
+    return false;
+  }
+  if (!access.isAuthenticated()) {
+    if (!access.checkAuth(req.headers.authorization)) {
+      unauthorized(res);
+      return false;
+    }
+    access.markAuthenticated();
+  }
+  return true;
+}
+
 export function createWebDavHandler(deps: WebDavHandlerDeps) {
-  /**
-   * Finder and other WebDAV clients expect RFC4918 LOCK/UNLOCK round-trips
-   * before writes. These tokens are a transport compatibility shim only:
-   * they do not gate PUT/MOVE/DELETE and they are not FILES application locks.
-   * Causal overwrite semantics stay in FILES v0.5 observed-log-head refs.
-   */
   const lockTokens = new Set<string>();
 
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -150,17 +166,14 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
       return;
     }
 
-    const creds = credentialsFromRequest(parsed.volume, req.headers.authorization);
-    if (creds === null) {
-      unauthorized(res);
-      return;
-    }
+    const label =
+      parsed.kind === 'root' ? '/' : hrefFor(parsed.volume, parsed.inner);
+    debugRequest(req, label);
+    debugResponse(req, res, label);
 
-    const { fileService, etagForPath } = deps;
-    const secret = creds.secret;
-    const inner = parsed.inner;
-    debugRequest(req, inner);
-    debugResponse(req, res, inner);
+    if (!ensureWebDavReady(deps.access, req, res)) return;
+
+    const { fileService, access, etagForPath } = deps;
 
     try {
       if (req.method === 'OPTIONS') {
@@ -171,11 +184,40 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
         return;
       }
 
+      if (parsed.kind === 'root') {
+        if (req.method === 'PROPFIND') {
+          const parts: string[] = [
+            responseHref('/', { isCollection: true }),
+          ];
+          for (const name of access.listVolumeNames()) {
+            parts.push(
+              responseHref(`/${encodeURIComponent(name)}/`, { isCollection: true }),
+            );
+          }
+          send(res, 207, multistatus(parts.join('\n')), {
+            'Content-Type': 'application/xml; charset=utf-8',
+          });
+          return;
+        }
+        send(res, 404);
+        return;
+      }
+
+      const secret = access.resolveVolumeSecret(parsed.volume);
+      if (secret === undefined) {
+        send(res, 404);
+        return;
+      }
+
+      const readOnly = access.isReadOnlySecret(secret);
+      const inner = parsed.inner;
+      const volume = parsed.volume;
+
       if (req.method === 'LOCK') {
         await readBody(req);
         const token = `opaquelocktoken:${randomUUID()}`;
         lockTokens.add(token);
-        send(res, 200, lockDiscovery(hrefFor(parsed.volume, inner), token), {
+        send(res, 200, lockDiscovery(hrefFor(volume, inner), token), {
           'Content-Type': 'application/xml; charset=utf-8',
           'Lock-Token': `<${token}>`,
         });
@@ -199,12 +241,10 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
         const snapshot = await deps.snapshotForSecret(secret);
         debugStage(req, inner, 'snapshotForSecret', snapshotStarted);
 
-        const sortStarted = performance.now();
         const files = [...snapshot.fs.files.values()].sort((a, b) => a.path.localeCompare(b.path));
         const dirs = [...snapshot.fs.directories.values()].sort((a, b) => a.path.localeCompare(b.path));
-        debugStage(req, inner, 'snapshot-sort', sortStarted);
         const parts: string[] = [];
-        const baseHref = hrefFor(parsed.volume, inner);
+        const baseHref = hrefFor(volume, inner);
         const baseEtag =
           inner.length > 0
             ? snapshot.fs.fileOrigins.get(inner) ?? snapshot.fs.entryHeads.get(inner) ?? snapshot.observedHead
@@ -234,7 +274,7 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
           if (depth === '1' && !isDirectChild(inner, dir.path)) continue;
           const etag = snapshot.fs.entryHeads.get(dir.path) ?? snapshot.observedHead;
           parts.push(
-            responseHref(`${hrefFor(parsed.volume, dir.path)}/`, {
+            responseHref(`${hrefFor(volume, dir.path)}/`, {
               isCollection: true,
               etag,
             }),
@@ -246,7 +286,7 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
           if (depth === '1' && !isDirectChild(inner, file.path)) continue;
           const etag = snapshot.fs.fileOrigins.get(file.path) ?? snapshot.fs.entryHeads.get(file.path);
           parts.push(
-            responseHref(hrefFor(parsed.volume, file.path), {
+            responseHref(hrefFor(volume, file.path), {
               isCollection: false,
               etag,
               length: file.size,
@@ -259,9 +299,7 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
       }
 
       if (req.method === 'GET' || req.method === 'HEAD') {
-        const snapshotStarted = performance.now();
         const snapshot = await deps.snapshotForSecret(secret);
-        debugStage(req, inner, 'snapshotForSecret', snapshotStarted);
         const meta = snapshot.fs.files.get(inner);
         if (meta === undefined) {
           send(res, 404);
@@ -277,9 +315,7 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
           send(res, 200, undefined, headers);
           return;
         }
-        const getFileStarted = performance.now();
         const data = await deps.readFileFromSnapshot(secret, inner, snapshot);
-        debugStage(req, inner, 'readFileFromSnapshot', getFileStarted);
         res.writeHead(200, {
           'Cache-Control': 'no-store',
           Pragma: 'no-cache',
@@ -290,13 +326,14 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
         return;
       }
 
+      if (readOnly) {
+        send(res, 403);
+        return;
+      }
+
       if (req.method === 'PUT') {
-        const bodyStarted = performance.now();
         const body = await readBody(req);
-        debugStage(req, inner, 'readBody', bodyStarted);
-        const putStarted = performance.now();
         await fileService.addFile(secret, inner, body);
-        debugStage(req, inner, 'fileService.addFile', putStarted);
         const etag = await etagForPath(secret, inner);
         const putHeaders: Record<string, string> = {};
         if (etag !== undefined) putHeaders.ETag = `"${etag}"`;
@@ -328,7 +365,7 @@ export function createWebDavHandler(deps: WebDavHandlerDeps) {
           .split('/')
           .filter((s) => s.length > 0)
           .map((segment) => decodeURIComponent(segment));
-        if (destSegs[0] !== parsed.volume) {
+        if (destSegs[0] !== volume) {
           send(res, 403);
           return;
         }

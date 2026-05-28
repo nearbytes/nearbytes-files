@@ -849,13 +849,20 @@ ${cyan('Local filesystem (FTP semantics)')}
   lls ${dim('[path]')}                             List local entries ${dim('(default: cwd)')}
 
 ${cyan('Volume connections')}
-  open <secret>                          Open a volume and make it active ${dim('(alias: volume open)')}
-  close                                  Close the active volume connection
-  use <key-prefix|secret>                Switch the active volume
-  volumes                                List all open volumes in this session
+  volume add <name> <secret>             Register a volume in session retention (0600)
+  volume use <name>                      Set active volume (must be registered)
+  volume forget <name>                   Remove from retention and close
+  volume list                            List registered volumes ${dim('(▶ = active)')}
+  open <secret>                          Open and activate ${dim('(alias: volume open; sugar for add+use)')}
+  close                                  Close the active volume in this process
+  use <name>                             Alias for volume use
+  forget <name>                          Alias for volume forget
+  volumes                                List open volumes in this session
   setup <secret>                         Derive and display the public key for a secret
   info                                   Show active volume info
-  timeline ${dim('[-s <secret>]')}                 Chronological audit log of volume events
+  timeline ${dim('[-s <secret>]')}                 Event audit log (causal replay order)
+  timeline goto <n|date>                 Read-only cursor: index or first event after date
+  timeline live                          Reset cursor to live head ${dim('(alias: timeline head)')}
   refresh                                Reload active volume state
 
 ${cyan('Profiles (sync keypairs — many served in parallel)')}

@@ -1,5 +1,9 @@
 # webdav-v1 — local HTTPS mount per volume
 
+**Mount and auth:** superseded for the `nbf` REPL by `webdav-v2.md` (single root,
+registered volumes, global Basic tied to sync profile). Transport, debug, replay
+cache, PROPFIND sizes, and live-head write mapping below remain normative.
+
 Normative package summary. Design notes: `nearbytes-design/design/webdav-v1.md`.
 Normative cross-repo spec: `nearbytes-specs/application/webdav-v1.md`.
 

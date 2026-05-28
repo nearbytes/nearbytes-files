@@ -63,7 +63,9 @@ Layout:
   channels/<pubkey-hex>/      # signed events per volume
 ```
 
-`volume open` only **reads** and replays this data into memory. Writes happen on `file add` / `file rm` (new events and blocks). Session state (open volumes, active volume) is in-process only and is lost when the CLI exits.
+`volume open` only **reads** and replays this data into memory. Writes happen on `file add` / `file rm` (new events and blocks).
+
+**Volume session (v1 target):** registered volumes persist in `<dataDir>/.nearbytes/volume-session.json` (`0600`). Use `volume add` / `volume use` / `volume forget` (profile-style: register the secret once, then switch by name). See `docs/specs/volume-session-v1.md`.
 
 Config (optional): `~/.nearbytes/config.json` — override with `-c` or `NEARBYTES_CONFIG`.
 
@@ -102,49 +104,47 @@ exit
 
 Tab completes commands, secrets, file names, and paths (Windows paths with `\` or `~` work). Command history persists in `~/.nearbytes/nbf-history` (override with `NEARBYTES_REPL_HISTORY`). Use `^R` for reverse search, `^C` to clear the line (does not exit), `^D` or `exit` to quit. Works on macOS, Linux, and Windows (Node 18+).
 
-After `volume open`, file commands use the active volume (no `-s` needed). `timeline` prints the volume’s event audit log (creates, deletes, renames, …) in replay order. Type `help` in the REPL for the full command list.
+After `volume open` (or `volume add` + `volume use`), file commands use the active volume (no `-s` needed).
+
+**Timeline:** `timeline` lists events in causal replay order. `timeline goto <n|date>` moves a read-only cursor (1-based index or first event after a parsed date). `timeline live` returns to the head. The cursor applies only to the active volume, resets when you switch volumes, and is not persisted. While the cursor is before the head, WebDAV shows that historical snapshot (read-only); writes always commit at the live log head.
+
+Type `help` in the REPL for the full command list.
 
 ### WebDAV
 
-Starting the REPL also starts the local HTTPS WebDAV server:
+Starting the REPL also starts the local HTTPS WebDAV server (requires an **active sync profile** — `profile add` / `profile use`).
 
 ```sh
 yarn repl
 ```
 
-The REPL prints the mount base URL, normally:
+**v2 mount (specified; rolling out in `nbf`):** one Finder mount for all registered volumes:
 
 ```text
-https://127.0.0.1:9843/<volume>/
+https://127.0.0.1:9843/
+  myvol/…
+  test2/…
 ```
 
-To open a volume over WebDAV:
+1. Register volumes: `volume add myvol myvol:password` (secret entered once).
+2. `volume use myvol` sets the active volume (timeline cursor resets).
+3. Connect to `https://127.0.0.1:9843/` with **global** HTTP Basic (tied to the active profile; re-auth after `profile use`).
+4. Only registered volume names appear; channels without a registered secret are never listed.
 
-1. Use the volume name as the URL path and username.
-2. Use the secret part as the password.
-3. The Nearbytes volume secret is `username:password`.
+**v1 (current code):** per-volume mount `https://127.0.0.1:9843/<volume>/` with Basic `username=<volume>`, `password=<secret-part>`.
 
-Example:
+The server binds to `127.0.0.1` with a local self-signed certificate. On macOS use **Go → Connect to Server…**.
 
-```text
-URL:      https://127.0.0.1:9843/myvol/
-Username: myvol
-Password: password
-Secret:   myvol:password
-```
-
-The server binds to `127.0.0.1` and uses a local self-signed certificate. On macOS Finder choose **Go → Connect to Server…** and enter the URL above. On clients that require a trusted certificate, accept/trust the generated local certificate for this machine.
-
-**Performance:** each volume keeps its hydrated event log and materialized filesystem in memory after the first access. `timeline`, `ls`, and WebDAV reads are instant on a warm cache; only the first open (or a sync from another process) reloads events from disk. Local writes append to the in-memory log without a full reload.
+**Performance:** each volume keeps its hydrated event log and materialized filesystem in memory after the first access. `timeline`, `ls`, and WebDAV reads are instant on a warm cache; only the first open (or a sync from another process) reloads events from disk.
 
 **Debug flags** (no environment variables):
 
 ```sh
-yarn repl --debug webdav,timing    # request log + replay timings
+yarn repl --debug webdav,timing
 yarn repl --webdav-port 9844
 ```
 
-See `docs/specs/webdav-v1.md` for all `--debug` areas.
+Specs: `docs/specs/webdav-v2.md`, `docs/specs/volume-session-v1.md`, `docs/specs/webdav-v1.md` (transport and replay cache).
 
 ### One-shot examples
 

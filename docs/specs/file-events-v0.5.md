@@ -87,3 +87,14 @@ secret:
 
 `loadFileReplayContext` implements cold load and stale merge. `extendFileReplayContext`
 implements local append. WebDAV and CLI share the same cache through `getReplayContext`.
+
+### Historical prefix replay (timeline cursor)
+
+For audit and read-only projection (`webdav-v2.md`, REPL `timeline goto`):
+
+1. Given cursor event hash `H`, materialized state MUST equal full replay of the
+   ordered entry prefix **through `H` inclusive** in causal replay order.
+2. Prefix materialization MUST be observationally equivalent to truncating the
+   live replay after applying events up to `H`.
+3. Mutating APIs MUST NOT append at `H`; commits always use the **live** observed
+   log head on disk (see `webdav-v2.md` §Writes always target live head).

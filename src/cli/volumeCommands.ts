@@ -60,7 +60,7 @@ export async function cmdVolumeUse(ctx: Context, name: string): Promise<void> {
   const secret = ctx.volumeRegistry.get(trimmed);
   if (secret === undefined) {
     throw new Error(
-      `Volume "${trimmed}" is not registered — run \`volume add ${trimmed} <secret>\` first`,
+      `Volume "${trimmed}" is not registered — run \`volume add ${trimmed} ${trimmed}:<password>\` first`,
     );
   }
   const rv = await openAndWatch(ctx, secret);

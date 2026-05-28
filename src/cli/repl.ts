@@ -78,7 +78,7 @@ import {
 import { cmdPeers, cmdMonitor, cmdWhoami } from './peersMonitor.js';
 import type { Context } from './context.js';
 import { restoreVolumeSession } from './volumeCommands.js';
-import { secretVolumePrefix } from './volumeSessionStore.js';
+import { parseVolumeAddArgs, secretVolumePrefix } from './volumeSessionStore.js';
 import { createReplCompleter } from './replCompleter.js';
 import {
   loadReplHistory,
@@ -356,8 +356,12 @@ async function dispatch(ctx: Context, tokens: string[], rl: readline.Interface):
         if (!secret) throw new Error('Usage: volume open <secret>');
         await cmdVolumeOpen(ctx, secret);
       } else if (subverb === 'add') {
-        const [name, secret] = subargs;
-        if (!name || !secret) throw new Error('Usage: volume add <name> <secret>');
+        if (subargs.length === 0) {
+          throw new Error(
+            'Usage: volume add <name> <name:password>   or   volume add <name:password>',
+          );
+        }
+        const { name, secret } = parseVolumeAddArgs(subargs);
         await cmdVolumeAdd(ctx, name, secret);
       } else if (subverb === 'use') {
         const [name] = subargs;

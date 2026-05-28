@@ -21,13 +21,40 @@ export function volumeSessionPath(dataDir: string): string {
 export function secretVolumePrefix(secret: string): string {
   const colon = secret.indexOf(':');
   if (colon < 0) {
-    throw new Error('Volume secret must be name:password (e.g. myvol:password)');
+    throw new Error(
+      'Volume secret must be two words: name and password separated by a colon inside the secret ' +
+        '(e.g. test2:my-password). Example: volume add test2 test2:my-password',
+    );
   }
   const prefix = secret.slice(0, colon);
   if (prefix.length === 0) {
     throw new Error('Volume secret must have a non-empty name before ":"');
   }
   return prefix;
+}
+
+/**
+ * `volume add <name> <secret>` or `volume add <name:password>` (name from prefix).
+ */
+export function parseVolumeAddArgs(parts: readonly string[]): { name: string; secret: string } {
+  if (parts.length === 1) {
+    const secret = parts[0]!.trim();
+    return { name: secretVolumePrefix(secret), secret };
+  }
+  if (parts.length === 2) {
+    const name = parts[0]!.trim();
+    const secret = parts[1]!.trim();
+    if (secret.includes(':')) {
+      return { name, secret };
+    }
+    throw new Error(
+      `Password for volume "${name}" must include the colon form. ` +
+        `Example: volume add ${name} ${name}:your-password`,
+    );
+  }
+  throw new Error(
+    'Usage: volume add <name> <name:password>   or   volume add <name:password>',
+  );
 }
 
 export function profileWebDavPassword(profileSecret: string): string {

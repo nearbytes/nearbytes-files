@@ -921,7 +921,7 @@ ${cyan('Local filesystem (FTP semantics)')}
   lls ${dim('[path]')}                             List local entries ${dim('(default: cwd)')}
 
 ${cyan('Volume connections')}
-  volume add <name> <secret>             Register a volume in session retention (0600)
+  volume add <name> <name:password>        Register volume ${dim('(or: volume add <name:password>)')}
   volume use <name>                      Set active volume (must be registered)
   volume forget <name>                   Remove from retention and close
   volume list                            List registered volumes ${dim('(▶ = active)')}

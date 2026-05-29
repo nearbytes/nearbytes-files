@@ -39,6 +39,7 @@ import {
 import { cmdPeers, cmdMonitor, cmdWhoami } from './peersMonitor.js';
 import { startRepl } from './repl.js';
 import { applyDebugOption, debugEnabled, parseDevInspectPort, parseWebDavPort } from '../debug.js';
+import { killStaleNbfProcesses } from '../dev/killNbf.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -121,13 +122,18 @@ async function runRepl(): Promise<void> {
     webdavPort: string;
     devInspect?: boolean | string;
   }>();
-  const config = await readConfig(opts.config).catch(() => emptyConfig(opts.dataDir));
+  const webdavPort = parseWebDavPort(opts.webdavPort);
   const devInspectPort = parseDevInspectPort(opts.devInspect);
+  killStaleNbfProcesses({
+    webdavPort,
+    devInspectPort: devInspectPort ?? 9845,
+  });
+  const config = await readConfig(opts.config).catch(() => emptyConfig(opts.dataDir));
   const ctx = await createContext(
     { ...config, dataDir: opts.dataDir ?? config.dataDir },
     {
       webdav: true,
-      webdavPort: parseWebDavPort(opts.webdavPort),
+      webdavPort,
       devInspectPort,
     },
   );

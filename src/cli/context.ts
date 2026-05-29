@@ -13,12 +13,14 @@ import {
 } from 'nearbytes-skeleton';
 import { createSecret, bytesToHex } from 'nearbytes-crypto';
 import type { WebDavServer } from '../webdav/index.js';
+import type { DevInspectServer } from '../dev/index.js';
 
 export interface Context {
   config: NearbytesConfig;
   readonly skeleton: NearbytesSkeleton;
   readonly fileService: FileService;
   webdav: WebDavServer | null;
+  devInspect: DevInspectServer | null;
   activeVolume: ReactiveVolume | null;
   readonly volumes: Map<string, ReactiveVolume>;
   readonly watchers: Map<string, VolumeWatcher>;
@@ -51,6 +53,8 @@ export interface Context {
 export interface CreateContextOptions {
   readonly webdav?: boolean;
   readonly webdavPort?: number;
+  /** When set, start the local HTTP dev inspect API on this port (default 9845). */
+  readonly devInspectPort?: number;
 }
 
 export async function createContext(
@@ -67,6 +71,7 @@ export async function createContext(
     skeleton,
     fileService,
     webdav: null,
+    devInspect: null,
     activeVolume: null,
     volumes,
     watchers,
@@ -82,6 +87,7 @@ export async function createContext(
     remoteCwd: '',
 
     async destroy(): Promise<void> {
+      if (ctx.devInspect !== null) await ctx.devInspect.close();
       if (ctx.webdav !== null) await ctx.webdav.close();
       for (const w of ctx.watchers.values()) w.close();
       ctx.watchers.clear();
@@ -99,6 +105,15 @@ export async function createContext(
     });
   }
 
+  if (options?.devInspectPort !== undefined) {
+    const { startDevInspectServer } = await import('../dev/index.js');
+    ctx.devInspect = await startDevInspectServer({
+      dataDir: config.dataDir,
+      fileService,
+      port: options.devInspectPort,
+    });
+  }
+
   return ctx;
 }
 
@@ -106,6 +121,23 @@ export function assertTimelineWritesAllowed(ctx: Context): void {
   if (ctx.timelineCursorHash !== null) {
     throw new Error('Timeline is not at live head — run `timeline live` before mutating files');
   }
+}
+
+/**
+ * Reload a volume after external writes (peer sync, nbsync, another process).
+ * `timeline` / `ls` / WebDAV use `FileService`'s replay cache; the dataDir
+ * watcher must invalidate it (see webdav-v1 §Projection — External sync).
+ */
+export async function reloadVolumeFromDisk(ctx: Context, secret: string): Promise<void> {
+  ctx.fileService.markReplayStale(secret);
+  ctx.lastTimelineEvents = null;
+
+  const keyPair = await ctx.skeleton.crypto.deriveKeys(createSecret(secret));
+  const keyHex = bytesToHex(keyPair.publicKey);
+  const rv = ctx.volumes.get(keyHex);
+  if (rv !== undefined) await rv.refresh();
+
+  await ctx.fileService.getReplayContext(secret);
 }
 
 export async function openAndWatch(
@@ -123,7 +155,9 @@ export async function openAndWatch(
   ctx.volumes.set(keyHex, rv);
 
   if (watch && !ctx.watchers.has(keyHex)) {
-    const watcher = createFilesystemWatcher(ctx.config.dataDir, rv);
+    const watcher = createFilesystemWatcher(ctx.config.dataDir, {
+      refresh: () => reloadVolumeFromDisk(ctx, secret),
+    });
     ctx.watchers.set(keyHex, watcher);
   }
 

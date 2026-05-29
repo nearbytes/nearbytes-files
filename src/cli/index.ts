@@ -38,7 +38,7 @@ import {
 } from './commands.js';
 import { cmdPeers, cmdMonitor, cmdWhoami } from './peersMonitor.js';
 import { startRepl } from './repl.js';
-import { applyDebugOption, debugEnabled, parseWebDavPort } from '../debug.js';
+import { applyDebugOption, debugEnabled, parseDevInspectPort, parseWebDavPort } from '../debug.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -90,7 +90,11 @@ program
     '--debug [areas]',
     'Debug logging: cli, webdav, timing (comma-separated; omit areas to enable all)',
   )
-  .option('--webdav-port <port>', 'WebDAV HTTPS listen port (REPL only)', '9843');
+  .option('--webdav-port <port>', 'WebDAV HTTPS listen port (REPL only)', '9843')
+  .option(
+    '--dev-inspect [port]',
+    'REPL: extra loopback HTTP port for live replay debug JSON (default 9845)',
+  );
 
 program.hook('preAction', (thisCommand) => {
   applyDebugOption(thisCommand.opts<{ debug?: boolean | string }>().debug);
@@ -102,18 +106,34 @@ program.hook('preAction', (thisCommand) => {
  * identically. Keeping a single launch function means custom-flag handling
  * (`-d`, `-c`, `-m`, `--debug`) can't drift between the two entry points.
  */
+function printDevInspectBanner(server: { baseUrl: string }): void {
+  console.error(`Dev inspect: ${server.baseUrl}/`);
+  console.error(
+    '  GET /health  /volumes  /view  /replay/<vol>?at=live|<#>|<hash>|cursor',
+  );
+}
+
 async function runRepl(): Promise<void> {
   const opts = program.opts<{
     config?: string;
     dataDir: string;
     monitor: boolean;
     webdavPort: string;
+    devInspect?: boolean | string;
   }>();
   const config = await readConfig(opts.config).catch(() => emptyConfig(opts.dataDir));
+  const devInspectPort = parseDevInspectPort(opts.devInspect);
   const ctx = await createContext(
     { ...config, dataDir: opts.dataDir ?? config.dataDir },
-    { webdav: true, webdavPort: parseWebDavPort(opts.webdavPort) },
+    {
+      webdav: true,
+      webdavPort: parseWebDavPort(opts.webdavPort),
+      devInspectPort,
+    },
   );
+  if (ctx.devInspect !== null) {
+    printDevInspectBanner(ctx.devInspect);
+  }
   if (ctx.webdav !== null) {
     const profile = ctx.config.activeProfile;
     console.error(`WebDAV: ${ctx.webdav.baseUrl}/ (registered volumes at root)`);

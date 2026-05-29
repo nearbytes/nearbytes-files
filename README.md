@@ -33,8 +33,10 @@ When pushing changes to multiple Nearbytes repos at once, run `yarn update` + `g
 
 | Command | What it does |
 |---------|----------------|
+| `yarn dev` | Stops stale `nbf` listeners, then REPL + `--dev-inspect` (ports 9843/9845) |
 | `yarn repl` | Interactive REPL (no subcommand → REPL is the default) |
 | `yarn repl -d <dir>` | REPL against a custom data directory |
+| `yarn repl --dev-inspect` | REPL with extra loopback JSON debug API (port 9845) |
 | `yarn nbf <args>` | One-shot command (e.g. `yarn nbf file list -s "myvol:pass"`) |
 | `yarn nbf -d <dir> <subcmd>` | Any subcommand against a custom data directory |
 | `yarn nbf repl` | Same as `yarn repl` |
@@ -145,6 +147,26 @@ yarn repl --webdav-port 9844
 ```
 
 Specs: `docs/specs/webdav-v2.md`, `docs/specs/volume-session-v1.md`, `docs/specs/webdav-v1.md` (transport and replay cache).
+
+### Dev inspect (HTTP)
+
+Read-only JSON API on loopback for live replay debugging (complements WebDAV). Only when the REPL is started with `--dev-inspect` (or `yarn dev`):
+
+```sh
+yarn repl --dev-inspect          # http://127.0.0.1:9845/ alongside the prompt
+yarn dev                         # shorthand for the above
+```
+
+```sh
+curl http://127.0.0.1:9845/health
+curl http://127.0.0.1:9845/volumes
+curl http://127.0.0.1:9845/view
+curl 'http://127.0.0.1:9845/replay/myvol?at=live'
+curl 'http://127.0.0.1:9845/replay/myvol?at=32'      # event # in timeline order
+curl 'http://127.0.0.1:9845/replay/myvol?at=cursor'  # REPL / webdav-view.json cursor
+```
+
+`at=cursor` reads `<dataDir>/.nearbytes/webdav-view.json` (same projection WebDAV uses after `timeline goto`). Spec: `docs/specs/dev-inspect-v1.md`.
 
 ### One-shot examples
 

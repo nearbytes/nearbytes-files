@@ -18,7 +18,12 @@ import { basename, join, resolve } from 'path';
 import { expandUserPath } from './paths.js';
 import { createSecret, bytesToHex } from 'nearbytes-crypto';
 import { green, yellow, red, cyan, dim, bold, formatFileTable, formatTimelineTable } from './output.js';
-import { assertTimelineWritesAllowed, type Context, refreshIfOpen } from './context.js';
+import {
+  assertTimelineWritesAllowed,
+  type Context,
+  refreshIfOpen,
+  reloadVolumeFromDisk,
+} from './context.js';
 import {
   cmdVolumeAdd,
   cmdVolumeForget,
@@ -464,10 +469,16 @@ export async function cmdTimelineLive(ctx: Context): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function cmdRefresh(ctx: Context): Promise<void> {
-  if (!ctx.activeVolume) throw new Error('No active volume');
-  await ctx.activeVolume.refresh();
-  const state = ctx.activeVolume.get();
-  console.log(green(`✓ Refreshed — ${state.files.size} file(s)`));
+  if (!ctx.activeVolume || ctx.volumeSessionActive === null) {
+    throw new Error('No active volume — use `volume use <name>` first');
+  }
+  const secret = ctx.volumeRegistry.get(ctx.volumeSessionActive);
+  if (secret === undefined) throw new Error('Active volume is not registered');
+  await reloadVolumeFromDisk(ctx, secret);
+  const replay = await ctx.fileService.getReplayContext(secret);
+  console.log(
+    green(`✓ Refreshed — ${replay.fs.files.size} file(s), ${replay.orderedEntries.length} event(s)`),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -948,10 +959,11 @@ export function cmdHelp(): void {
 ${bold('Nearbytes REPL')} ${dim('— FTP/SFTP-style commands. The "file" prefix is optional everywhere.')}
 
 ${cyan('Startup / global CLI options')}
-  nbf ${dim('[-c <config>] [-d <dataDir>] [-m] [--debug [areas]] [--webdav-port <port>] [repl]')}
+  nbf ${dim('[-c <config>] [-d <dataDir>] [-m] [--debug [areas]] [--webdav-port <port>] [--dev-inspect [port]] [repl]')}
                                          ${dim('-m auto-mounts monitor on REPL start')}
                                          ${dim('--debug areas: cli, webdav, timing (comma-separated; all if omitted)')}
-                                         ${dim('--webdav-port default 9843; -d is dataDir (in mget: destination dir)')}
+                                         ${dim('--webdav-port default 9843; --dev-inspect extra debug port 9845')}
+                                         ${dim('yarn dev = yarn repl --dev-inspect')}
 
 ${cyan('Remote filesystem (volume)')}
   ls ${dim('[path] [-s <secret>]')}                List entries under path ${dim('(default: cwd, alias: dir, list)')}
@@ -985,12 +997,16 @@ ${cyan('Volume connections')}
   timeline ${dim('[-s <secret>]')}                 Event audit log (causal replay order)
   timeline goto <#|date|hash>            Read-only cursor: event # first, then date, then ≥8 hex of hash
   timeline live                          Reset cursor to live head ${dim('(alias: timeline head)')}
-  refresh                                Reload active volume state
+  refresh                                Reload from disk (sync + timeline cache)
 
 ${cyan('WebDAV (local mount)')}
   webdav status                          Show URL, profile credentials hint, client login state
   webdav refresh                         Bump ETags so Finder/Explorer/gvfs pick up timeline changes
   webdav logout                          Force Finder to re-authenticate
+
+${cyan('Dev inspect (read-only HTTP JSON — when started with --dev-inspect or yarn dev)')}
+  ${dim('GET')} /health /volumes /view   ${dim('session + timeline view state')}
+  ${dim('GET')} /replay/<vol>?at=…       ${dim('at=live | <#> | <hash> | cursor (webdav-view.json)')}
 
 ${cyan('Profiles (sync keypairs — many served in parallel)')}
   profile add <name> <secret>            Add a named profile slot ${dim('(first becomes active)')}

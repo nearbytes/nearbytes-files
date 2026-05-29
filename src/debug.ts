@@ -35,13 +35,28 @@ export function debugEnabled(area: DebugArea): boolean {
   return active.has(area);
 }
 
-export function parseWebDavPort(raw: string | number | undefined, fallback = 9843): number {
+export function parseTcpPort(
+  raw: string | number | undefined,
+  fallback: number,
+  label: string,
+): number {
   if (raw === undefined) return fallback;
   const port = typeof raw === 'number' ? raw : Number.parseInt(String(raw), 10);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`Invalid WebDAV port: ${String(raw)}`);
+    throw new Error(`Invalid ${label} port: ${String(raw)}`);
   }
   return port;
+}
+
+export function parseWebDavPort(raw: string | number | undefined, fallback = 9843): number {
+  return parseTcpPort(raw, fallback, 'WebDAV');
+}
+
+/** `--dev-inspect` with no value → default 9845; omit/false → disabled. */
+export function parseDevInspectPort(raw: boolean | string | undefined): number | undefined {
+  if (raw === undefined || raw === false) return undefined;
+  if (raw === true) return 9845;
+  return parseTcpPort(raw, 9845, 'dev-inspect');
 }
 
 function isDebugArea(value: string): value is DebugArea {

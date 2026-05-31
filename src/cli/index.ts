@@ -238,7 +238,7 @@ program
 program
   .command('peers')
   .description('Snapshot of currently-connected peers (role, route, age, transport)')
-  .option('-w, --wide', 'Show full 32-hex peer ids in the peer table')
+  .option('-w, --wide', 'Show full peer ids and instance public keys in the peer table')
   .action(async (opts: { wide?: boolean }) => {
     const gopts = program.opts<{ config?: string; dataDir: string }>();
     const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));
@@ -251,7 +251,7 @@ program
 
 program
   .command('whoami')
-  .description('Show this node\'s peerId, active profile, and sync configuration')
+  .description('Show this node\'s peerId, instance key, active profile, and sync configuration')
   .action(async () => {
     const gopts = program.opts<{ config?: string; dataDir: string }>();
     const config = await readConfig(gopts.config).catch(() => emptyConfig(gopts.dataDir));

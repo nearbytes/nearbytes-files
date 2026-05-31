@@ -307,6 +307,7 @@ interface PeerRow {
   readonly role: 'sibling' | 'friend';
   readonly profile: string;
   readonly peerId: string;
+  readonly instanceId: string;
   readonly route: string;
   readonly routeTint: (s: string) => string;
   readonly label: string;
@@ -315,10 +316,14 @@ interface PeerRow {
 
 function toRow(peer: ConnectedPeer, now: number, wide = false): PeerRow {
   const { route, tint } = classifyTransport(peer.transportLabel);
+  const instanceId =
+    (peer as ConnectedPeer & { readonly remoteInstancePublicKey?: string })
+      .remoteInstancePublicKey ?? '';
   return {
     role: peer.role,
     profile: wide ? peer.remoteProfilePublicKey : shortHex(peer.remoteProfilePublicKey),
     peerId: wide ? peer.remotePeerId : shortHex(peer.remotePeerId),
+    instanceId: wide ? instanceId : shortHex(instanceId),
     route,
     routeTint: tint,
     label: peer.transportLabel,
@@ -340,6 +345,7 @@ function renderPeerTableLines(rows: readonly PeerRow[], wide = false): string[] 
   const COL_ROLE = 8;
   const COL_PROFILE = wide ? 66 : 10;
   const COL_PEERID = wide ? 34 : 10;
+  const COL_INSTANCE = wide ? 132 : 10;
   const COL_ROUTE = 10;
   const COL_AGE = 6;
   const header =
@@ -347,10 +353,11 @@ function renderPeerTableLines(rows: readonly PeerRow[], wide = false): string[] 
     bold('Role'.padEnd(COL_ROLE)) +
     bold('Profile'.padEnd(COL_PROFILE)) +
     bold('PeerId'.padEnd(COL_PEERID)) +
+    bold('Instance'.padEnd(COL_INSTANCE)) +
     bold('Route'.padEnd(COL_ROUTE)) +
     bold('Age'.padEnd(COL_AGE)) +
     bold('Endpoint');
-  const sep = dim('─'.repeat(COL_NUM + COL_ROLE + COL_PROFILE + COL_PEERID + COL_ROUTE + COL_AGE + 24));
+  const sep = dim('─'.repeat(COL_NUM + COL_ROLE + COL_PROFILE + COL_PEERID + COL_INSTANCE + COL_ROUTE + COL_AGE + 24));
   /**
    * Pad-first-then-tint: ANSI escape codes are invisible to `String.padEnd`
    * but counted in `.length`, so colouring before padding breaks alignment.
@@ -366,6 +373,7 @@ function renderPeerTableLines(rows: readonly PeerRow[], wide = false): string[] 
       padThenTint(r.role, COL_ROLE, roleTint) +
       r.profile.padEnd(COL_PROFILE) +
       r.peerId.padEnd(COL_PEERID) +
+      r.instanceId.padEnd(COL_INSTANCE) +
       padThenTint(r.route, COL_ROUTE, r.routeTint) +
       r.age.padEnd(COL_AGE) +
       dim(formatTransportEndpoint(r.label))
@@ -379,9 +387,8 @@ function renderPeerTable(rows: readonly PeerRow[], wide = false): string {
 }
 
 /**
- * Print this node's DISC-26 identity and sync configuration. Use to
- * answer "what is my peerId?" and to match against the PeerId column
- * when a remote machine connects (e.g. pc-ciancia → `e44ff9aa…`).
+ * Print this node's DISC-26/27 peer and instance identity plus sync
+ * configuration. Use it to match either diagnostic id against the peer table.
  */
 export async function cmdWhoami(ctx: Context): Promise<void> {
   const state = await readMonitorState(ctx);
@@ -393,7 +400,10 @@ export async function cmdWhoami(ctx: Context): Promise<void> {
   console.log(dim('─'.repeat(60)));
   console.log(`  ${bold('dataDir:')}      ${ctx.config.dataDir}`);
   console.log(
-    `  ${bold('peerId:')}       ${state.localPeerId !== '' ? cyan(state.localPeerId) : dim('(none — no profile or unreadable .nearbytes-node-id)')}`,
+    `  ${bold('instance:')}     ${state.localInstanceId !== '' ? cyan(state.localInstanceId) : dim('(none - no profile or unreadable sync/instance.json)')}`,
+  );
+  console.log(
+    `  ${bold('peerId:')}       ${state.localPeerId !== '' ? cyan(state.localPeerId) : dim('(none - no profile or unreadable .nearbytes-node-id)')}`,
   );
   console.log(
     `  ${bold('profile:')}      ${profileName !== null ? green(profileName) : dim('(none)')}`,
@@ -408,15 +418,15 @@ export async function cmdWhoami(ctx: Context): Promise<void> {
     console.log(
       dim(
         '  Network view (peers, events, throughput) comes from the daemon beacon — ' +
-          'run `peers` or `monitor` to inspect remote peerIds.',
+          'run `peers` or `monitor` to inspect remote peerIds and instances.',
       ),
     );
   } else {
     console.log('');
     console.log(
       dim(
-        '  When a remote peer connects, its PeerId column identifies that machine. ' +
-          'Match the first 8 hex chars against known node ids (e.g. pc-ciancia).',
+        '  When a remote peer connects, its PeerId and Instance columns identify that machine. ' +
+          'Match the first 8 hex chars against known ids.',
       ),
     );
   }
@@ -718,6 +728,7 @@ interface MonitorState {
    * back to the on-disk node id + configured profile intent.
    */
   readonly localPeerId: string;
+  readonly localInstanceId: string;
   readonly localActiveProfile: string;
   /**
    * Most-recent wire events from whichever source we read.
@@ -759,6 +770,7 @@ const BEACON_STALE_THRESHOLD_MS = 5_000;
  */
 async function readMonitorState(ctx: Context): Promise<MonitorState> {
   const sync = ctx.skeleton.sync;
+  const syncWithInstance = sync as typeof sync & { readonly instancePublicKey?: string };
   const daemon = (sync as { daemon?: { holderPid: number; lockPath: string } }).daemon;
   if (daemon === undefined) {
     return {
@@ -767,6 +779,7 @@ async function readMonitorState(ctx: Context): Promise<MonitorState> {
       events: sync.recentEvents(),
       stats: sync.stats(),
       localPeerId: sync.peerId,
+      localInstanceId: syncWithInstance.instancePublicKey ?? '',
       localActiveProfile: sync.activeProfilePublicKey,
       mode: 'local',
     };
@@ -779,6 +792,7 @@ async function readMonitorState(ctx: Context): Promise<MonitorState> {
       events: [],
       stats: ZERO_STATS,
       localPeerId: sync.peerId,
+      localInstanceId: syncWithInstance.instancePublicKey ?? '',
       localActiveProfile: sync.activeProfilePublicKey,
       mode: 'beacon-missing',
       beaconPid: daemon.holderPid,
@@ -786,6 +800,8 @@ async function readMonitorState(ctx: Context): Promise<MonitorState> {
   }
   const peers: ConnectedPeer[] = beacon.payload.peers.map((p) => ({
     remoteProfilePublicKey: p.remoteProfilePublicKey,
+    remoteInstancePublicKey:
+      (p as typeof p & { readonly remoteInstancePublicKey?: string }).remoteInstancePublicKey ?? '',
     remotePeerId: p.remotePeerId,
     transportLabel: p.transportLabel,
     localAssociationProfile: p.localAssociationProfile,
@@ -808,6 +824,11 @@ async function readMonitorState(ctx: Context): Promise<MonitorState> {
      */
     stats: beacon.payload.stats ?? ZERO_STATS,
     localPeerId: beacon.payload.peerId ?? sync.peerId,
+    localInstanceId:
+      (beacon.payload as typeof beacon.payload & { readonly instancePublicKey?: string })
+        .instancePublicKey ??
+      syncWithInstance.instancePublicKey ??
+      '',
     localActiveProfile: beacon.payload.activeProfilePublicKey ?? sync.activeProfilePublicKey,
     mode,
     beaconAgeMs: beacon.ageMs,
@@ -816,18 +837,21 @@ async function readMonitorState(ctx: Context): Promise<MonitorState> {
 }
 
 /**
- * One-line summary of *this* node's wire identity so the operator can
- * map peer-table rows (remote peerId) to known machines without
- * `cat .nearbytes-node-id`.
+ * One-line summary of *this* instance's wire identity so the operator can
+ * map peer-table rows to known machines without opening `sync/instance.json`.
  */
 function renderLocalIdentityLine(state: MonitorState, compact = false): string {
-  if (state.localPeerId === '' && state.localActiveProfile === '') {
+  if (state.localPeerId === '' && state.localInstanceId === '' && state.localActiveProfile === '') {
     return dim('  me (no profile — use `profile add` first)');
   }
   const parts: string[] = [];
   if (state.localPeerId !== '') {
     const peerShown = compact ? state.localPeerId.slice(0, 8) : state.localPeerId;
     parts.push(bold('peer=') + cyan(peerShown));
+  }
+  if (state.localInstanceId !== '') {
+    const instanceShown = compact ? state.localInstanceId.slice(0, 8) : state.localInstanceId;
+    parts.push(bold('inst=') + cyan(instanceShown));
   }
   if (state.localActiveProfile !== '') {
     const pkShown = compact
@@ -878,7 +902,7 @@ function describeMode(state: MonitorState): string {
  * In writer-only mode reads from the daemon's beacon — never just refuses.
  */
 export interface PeersCommandOptions {
-  /** Show full 32-hex peer ids (and profile keys) in the peer table. */
+  /** Show full peer ids, instance public keys, and profile keys in the peer table. */
   readonly wide?: boolean;
 }
 

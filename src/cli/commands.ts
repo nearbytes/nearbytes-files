@@ -1023,8 +1023,8 @@ ${cyan('Friends (asymmetric follow, shared across all profiles)')}
   friend show <profile-pubkey>           Print a key for sharing
 
 ${cyan('Diagnostics (where is this block coming from?)')}
-  whoami                                 This node's peerId + active profile ${dim('(match vs peer table)')}
-  peers ${dim('[-w]')}                            Snapshot of connected peers ${dim('(-w = full peer ids)')}
+  whoami                                 This node's peerId, instance key + active profile ${dim('(match vs peer table)')}
+  peers ${dim('[-w]')}                            Snapshot of connected peers ${dim('(-w = full peer + instance keys)')}
   monitor ${dim('[on|off]')} ${dim('/ top')}                 Toggle sticky live panel above the prompt ${dim('(REPL)')}
                                          ${dim('Launch with `nbf -m` to mount the monitor on startup.')}
 

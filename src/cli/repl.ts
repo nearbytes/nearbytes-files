@@ -77,6 +77,7 @@ import {
 } from './commands.js';
 import { cmdPeers, cmdMonitor, cmdWhoami } from './peersMonitor.js';
 import type { Context } from './context.js';
+import { attachSyncInboundRefresh } from './context.js';
 import { restoreVolumeSession } from './volumeCommands.js';
 import { parseVolumeAddArgs, secretVolumePrefix } from './volumeSessionStore.js';
 import { cmdWebDavLogout, cmdWebDavRefresh, cmdWebDavStatus } from './webdavCommands.js';
@@ -635,6 +636,8 @@ export async function startRepl(ctx: Context, opts: StartReplOptions = {}): Prom
     }
   }
 
+  const stopSyncRefresh = attachSyncInboundRefresh(ctx);
+
   rl.prompt();
 
   /**
@@ -722,6 +725,7 @@ export async function startRepl(ctx: Context, opts: StartReplOptions = {}): Prom
      *   4. Hard-stop sync (destroy) and exit 0.
      */
     void historySession.flush().finally(() => {
+      stopSyncRefresh();
       console.log('');
       const abortController = new AbortController();
       const onSigint = (): void => abortController.abort();

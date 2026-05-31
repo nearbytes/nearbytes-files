@@ -170,3 +170,50 @@ export async function refreshIfOpen(ctx: Context, secret: string): Promise<void>
   const rv = ctx.volumes.get(keyHex);
   if (rv !== undefined) await rv.refresh();
 }
+
+/**
+ * When this process owns the sync engine, reload open volumes after inbound
+ * peer writes so `ls` / `timeline` reflect synced data without manual refresh.
+ */
+export function attachSyncInboundRefresh(ctx: Context): () => void {
+  const writerOnly =
+    (ctx.skeleton.sync as { daemon?: unknown }).daemon !== undefined;
+  if (writerOnly) {
+    return () => {};
+  }
+
+  return ctx.skeleton.sync.onEvent((event) => {
+    if (event.kind === 'event-received') {
+      void refreshVolumesForChannel(ctx, event.channel.toLowerCase());
+      return;
+    }
+    if (event.kind === 'block-received') {
+      void refreshAllOpenVolumes(ctx);
+    }
+  });
+}
+
+async function refreshVolumesForChannel(ctx: Context, channelHex: string): Promise<void> {
+  for (const secret of ctx.volumeRegistry.values()) {
+    const keyPair = await ctx.skeleton.crypto.deriveKeys(createSecret(secret));
+    if (bytesToHex(keyPair.publicKey).toLowerCase() !== channelHex) {
+      continue;
+    }
+    const keyHex = bytesToHex(keyPair.publicKey);
+    if (!ctx.volumes.has(keyHex)) {
+      continue;
+    }
+    await reloadVolumeFromDisk(ctx, secret);
+  }
+}
+
+async function refreshAllOpenVolumes(ctx: Context): Promise<void> {
+  for (const secret of ctx.volumeRegistry.values()) {
+    const keyPair = await ctx.skeleton.crypto.deriveKeys(createSecret(secret));
+    const keyHex = bytesToHex(keyPair.publicKey);
+    if (!ctx.volumes.has(keyHex)) {
+      continue;
+    }
+    await reloadVolumeFromDisk(ctx, secret);
+  }
+}

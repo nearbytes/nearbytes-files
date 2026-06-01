@@ -48,6 +48,7 @@
     "nbf": "tsc && node dist/cli/index.js",
     "repl": "tsc && node dist/cli/index.js",
     "dev": "yarn install && yarn repl --dev-inspect",
+    "probe:sync-matrix": "yarn build && node scripts/sync-matrix-probe.mjs",
     "update": "node scripts/update.mjs"
   },
   "license": "MIT",
@@ -58,7 +59,7 @@
     "commander": "^12.0.0",
     "nearbytes-crypto": "github:nearbytes/nearbytes-crypto#6859719510764702844882b8488b35ab31f20145",
     "nearbytes-log": "github:nearbytes/nearbytes-log#96d579f37b8c9d74d19a62f8019dd415e82b079e",
-    "nearbytes-skeleton": "github:nearbytes/nearbytes-skeleton#57d46a832148b24027ee986679f211330be91a0a",
+    "nearbytes-skeleton": "github:nearbytes/nearbytes-skeleton#53d1048780f79b348a2d5ae5bc8f35d916fed622",
     "selfsigned": "^5.5.0"
   },
   "devDependencies": {

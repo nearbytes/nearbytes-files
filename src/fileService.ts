@@ -316,8 +316,8 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
     }
     if (through === undefined) {
       if (state !== undefined) {
-        if (!state.stale && state.context !== undefined) return state.context;
         if (state.pending !== undefined) return state.pending;
+        if (!state.stale && state.context !== undefined) return state.context;
       }
     }
     const seed = through === undefined && state?.stale ? state.context : undefined;
@@ -332,7 +332,7 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
       return context;
     });
     if (through === undefined) {
-      replayCache.set(normalizedSecret, { context: state?.context, pending, stale: false });
+      replayCache.set(normalizedSecret, { context: state?.context, pending, stale: true });
     }
     return pending;
   };

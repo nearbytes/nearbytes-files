@@ -4,6 +4,8 @@
  */
 
 import http from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { Server } from 'node:http';
 import type { FileService } from '../fileService.js';
 import { replayContextThrough } from '../fileEmit.js';
@@ -87,6 +89,11 @@ export async function startDevInspectServer(
           res.end(JSON.stringify(await loadWebDavView(dataDir), null, 2));
           return;
         }
+        if (url.pathname === '/sync/summary') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(await loadSyncSummary(dataDir), null, 2));
+          return;
+        }
         const m = url.pathname.match(/^\/replay\/([^/]+)$/);
         if (m !== null && req.method === 'GET') {
           const volume = decodeURIComponent(m[1]!);
@@ -136,4 +143,30 @@ export async function startDevInspectServer(
         server.close((err) => (err ? reject(err) : resolve()));
       }),
   };
+}
+
+async function loadSyncSummary(dataDir: string): Promise<{
+  receptionLines: number;
+  receptionTail: unknown[];
+  fetchCursors: unknown;
+}> {
+  const receptionPath = join(dataDir, 'sync', 'reception.jsonl');
+  const cursorPath = join(dataDir, 'sync', 'fetch-cursors.json');
+  let receptionLines = 0;
+  let receptionTail: unknown[] = [];
+  try {
+    const raw = await readFile(receptionPath, 'utf8');
+    const lines = raw.trim().split('\n').filter((line) => line.length > 0);
+    receptionLines = lines.length;
+    receptionTail = lines.slice(-5).map((line) => JSON.parse(line) as unknown);
+  } catch {
+    receptionTail = [];
+  }
+  let fetchCursors: unknown = null;
+  try {
+    fetchCursors = JSON.parse(await readFile(cursorPath, 'utf8')) as unknown;
+  } catch {
+    fetchCursors = null;
+  }
+  return { receptionLines, receptionTail, fetchCursors };
 }

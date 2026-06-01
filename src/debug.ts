@@ -6,7 +6,7 @@
  *   - webdav — log each WebDAV request and response
  *   - timing — per-request stage timings and log-replay breakdown
  *   - sync     — wire protocol (have/want/delta) and volume refresh on inbound events
- *   - timeline — per-peer connect/sync phases (discovery → data) without wire spam
+ *   - timeline — boot + discovery startup + peer search + connect phases (no wire spam)
  *
  * `--debug` with no argument enables all areas.
  */

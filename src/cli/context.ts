@@ -18,9 +18,13 @@ import { defaultPathMapper, blockPath, publicKeyFromHex } from 'nearbytes-log';
 import type { Hash } from 'nearbytes-crypto';
 import type { WebDavServer } from '../webdav/index.js';
 import type { DevInspectServer } from '../dev/index.js';
+import { formatSyncEventLine, installSyncDebugBridge } from '../syncDebugBridge.js';
 import { debugEnabled } from '../debug.js';
 import { debugLog } from '../debugLog.js';
-import { formatSyncEventLine, installSyncDebugBridge } from '../syncDebugBridge.js';
+import {
+  syncTimelineBeginSession,
+  syncTimelineMarkSession,
+} from 'nearbytes-sync/node';
 
 export interface Context {
   config: NearbytesConfig;
@@ -69,7 +73,14 @@ export async function createContext(
   options?: CreateContextOptions,
 ): Promise<Context> {
   installSyncDebugBridge();
+  if (debugEnabled('timeline')) {
+    syncTimelineBeginSession('repl-start');
+  }
+  const skeletonStart = Date.now();
   const skeleton = await createFilesystemSkeletonFromConfig(config);
+  if (debugEnabled('timeline')) {
+    syncTimelineMarkSession('skeleton-ready', `${Date.now() - skeletonStart}ms`);
+  }
   const fileService = createFileService({ log: skeleton.log, crypto: skeleton.crypto });
   const volumes = new Map<string, ReactiveVolume>();
   const watchers = new Map<string, VolumeWatcher>();

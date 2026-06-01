@@ -39,6 +39,7 @@ import {
 import { cmdPeers, cmdMonitor, cmdWhoami } from './peersMonitor.js';
 import { startRepl } from './repl.js';
 import { applyDebugOption, debugEnabled, parseDevInspectPort, parseWebDavPort } from '../debug.js';
+import { syncTimelineMarkSession } from 'nearbytes-sync/node';
 import { killStaleNbfProcesses } from '../dev/killNbf.js';
 
 // ---------------------------------------------------------------------------
@@ -139,6 +140,9 @@ async function runRepl(): Promise<void> {
       devInspectPort,
     },
   );
+  if (debugEnabled('timeline')) {
+    syncTimelineMarkSession('repl-ready');
+  }
   if (ctx.devInspect !== null) {
     printDevInspectBanner(ctx.devInspect);
   }

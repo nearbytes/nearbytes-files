@@ -56,7 +56,6 @@
     "probe:event-propagation": "yarn build && node scripts/event-propagation-run.mjs",
     "probe:cold-restart-propagation": "yarn build && node scripts/cold-restart-propagation-probe.mjs",
     "probe:cold-restart": "yarn build && node scripts/cold-restart-propagation-run.mjs",
-    "copy:sync": "yarn --cwd ../nearbytes-sync build && rsync -a ../nearbytes-sync/dist/ node_modules/nearbytes-sync/dist/",
     "update": "node scripts/update.mjs"
   },
   "license": "MIT",
@@ -67,7 +66,7 @@
     "commander": "^12.0.0",
     "nearbytes-crypto": "github:nearbytes/nearbytes-crypto#6859719510764702844882b8488b35ab31f20145",
     "nearbytes-log": "github:nearbytes/nearbytes-log#96d579f37b8c9d74d19a62f8019dd415e82b079e",
-    "nearbytes-skeleton": "github:nearbytes/nearbytes-skeleton#25b7819c2e2459a156c854bc9c3c1dd7260473b6",
+    "nearbytes-skeleton": "github:nearbytes/nearbytes-skeleton#afaeff665ad0f4625c76a2a375d5b37533df380b",
     "selfsigned": "^5.5.0"
   },
   "devDependencies": {

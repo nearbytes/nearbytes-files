@@ -47,7 +47,7 @@
     "type-check": "tsc --noEmit",
     "nbf": "tsc && node dist/cli/index.js",
     "repl": "tsc && node dist/cli/index.js",
-    "dev": "tsc && node dist/cli/index.js --dev-inspect",
+    "dev": "yarn install && yarn repl --dev-inspect",
     "update": "node scripts/update.mjs"
   },
   "license": "MIT",

@@ -10,6 +10,15 @@ package-lock.json
 !.local/.gitkeep
 dist/
 
+# Accidental `tsc` emit to repo root (wrong cwd or outDir) — real output lives in dist/
+/*.js
+/*.js.map
+/*.d.ts
+/*.d.ts.map
+/cli/
+/dev/
+/webdav/
+
 # Ad-hoc fixtures dropped into the repo root by REPL/test runs
 tmp*.jpeg
 tmp*.jpg

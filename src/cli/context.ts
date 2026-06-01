@@ -166,6 +166,7 @@ export async function openAndWatch(
 
   const rv = await createReactiveVolume(createSecret(secret), ctx.skeleton.crypto, ctx.skeleton.log);
   ctx.volumes.set(keyHex, rv);
+  await ctx.fileService.getReplayContext(secret);
 
   if (watch && !ctx.watchers.has(keyHex)) {
     const channelDir = join(ctx.config.dataDir, defaultPathMapper(keyPair.publicKey));

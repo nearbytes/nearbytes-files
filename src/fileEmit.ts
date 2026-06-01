@@ -286,6 +286,13 @@ async function loadChannelEntries(
   await verifyEventLog(newEntries, volume, crypto);
   const orderedEntries = orderEventLogEntries([...seed.orderedEntries, ...newEntries]);
   if (!hasOrderedPrefix(seed.orderedEntries, orderedEntries)) {
+    if (debugEnabled('timing')) {
+      debugLog(
+        'timing',
+        'replay',
+        `ordered-prefix mismatch — full reload (disk=${listed.length} cached=${seed.orderedEntries.length})`,
+      );
+    }
     const entries = await loadEventLog(volume, log, crypto);
     await verifyEventLog(entries, volume, crypto);
     return { orderedEntries: orderEventLogEntries(entries), loadedCount: entries.length };

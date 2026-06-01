@@ -960,7 +960,7 @@ ${bold('Nearbytes REPL')} ${dim('— FTP/SFTP-style commands. The "file" prefix 
 ${cyan('Startup / global CLI options')}
   nbf ${dim('[-c <config>] [-d <dataDir>] [-m] [--debug [areas]] [--webdav-port <port>] [--dev-inspect [port]] [repl]')}
                                          ${dim('-m auto-mounts monitor on REPL start')}
-                                         ${dim('--debug areas: cli, webdav, timing, sync (comma-separated; all if omitted)')}
+                                         ${dim('--debug areas: cli, webdav, timing, sync, timeline (comma-separated; all if omitted)')}
                                          ${dim('--webdav-port default 9843; --dev-inspect extra debug port 9845')}
                                          ${dim('yarn dev = yarn repl --dev-inspect')}
 

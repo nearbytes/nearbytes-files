@@ -53,6 +53,10 @@
     "probe:false-cursor": "yarn build && node scripts/false-cursor-probe.mjs",
     "probe:late-join-delete": "yarn build && node scripts/late-join-delete-probe.mjs",
     "probe:remote-joins": "yarn build && node scripts/remote-joins-probe.mjs",
+    "probe:event-propagation": "yarn build && node scripts/event-propagation-run.mjs",
+    "probe:cold-restart-propagation": "yarn build && node scripts/cold-restart-propagation-probe.mjs",
+    "probe:cold-restart": "yarn build && node scripts/cold-restart-propagation-run.mjs",
+    "copy:sync": "yarn --cwd ../nearbytes-sync build && rsync -a ../nearbytes-sync/dist/ node_modules/nearbytes-sync/dist/",
     "update": "node scripts/update.mjs"
   },
   "license": "MIT",

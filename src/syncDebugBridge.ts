@@ -1,18 +1,28 @@
 /**
- * Bridges `nbf --debug sync` to nearbytes-sync verbose tracing.
+ * Bridges `nbf --debug sync|timeline` to nearbytes-sync tracing.
  */
 
-import { configureSyncDebug, type SyncEvent } from 'nearbytes-sync/node';
+import { configureSyncDebug, configureSyncTimeline, type SyncEvent } from 'nearbytes-sync/node';
 import { debugEnabled } from './debug.js';
 import { debugLog } from './debugLog.js';
 
 export function installSyncDebugBridge(): void {
-  const enabled = debugEnabled('sync');
+  const syncOn = debugEnabled('sync');
   configureSyncDebug({
-    enabled,
-    sink: enabled
+    enabled: syncOn,
+    sink: syncOn
       ? (scope, line) => {
           debugLog('sync', scope, line);
+        }
+      : undefined,
+  });
+
+  const timelineOn = debugEnabled('timeline');
+  configureSyncTimeline({
+    enabled: timelineOn,
+    sink: timelineOn
+      ? (line) => {
+          debugLog('timeline', 'sync', line);
         }
       : undefined,
   });

@@ -5,12 +5,13 @@
  *   - cli    — stack traces on CLI/REPL command errors
  *   - webdav — log each WebDAV request and response
  *   - timing — per-request stage timings and log-replay breakdown
- *   - sync   — wire protocol (have/want/delta) and volume refresh on inbound events
+ *   - sync     — wire protocol (have/want/delta) and volume refresh on inbound events
+ *   - timeline — per-peer connect/sync phases (discovery → data) without wire spam
  *
  * `--debug` with no argument enables all areas.
  */
 
-export const DEBUG_AREAS = ['cli', 'webdav', 'timing', 'sync'] as const;
+export const DEBUG_AREAS = ['cli', 'webdav', 'timing', 'sync', 'timeline'] as const;
 export type DebugArea = (typeof DEBUG_AREAS)[number];
 
 const active = new Set<DebugArea>();

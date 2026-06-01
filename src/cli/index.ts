@@ -89,7 +89,7 @@ program
   )
   .option(
     '--debug [areas]',
-    'Debug logging: cli, webdav, timing, sync (comma-separated; omit areas to enable all)',
+    'Debug logging: cli, webdav, timing, sync, timeline (comma-separated; omit areas to enable all)',
   )
   .option('--webdav-port <port>', 'WebDAV HTTPS listen port (REPL only)', '9843')
   .option(

@@ -13,7 +13,9 @@ import {
 } from 'nearbytes-skeleton';
 import { join } from 'node:path';
 import { createSecret, bytesToHex } from 'nearbytes-crypto';
-import { defaultPathMapper } from 'nearbytes-log';
+import { access } from 'node:fs/promises';
+import { defaultPathMapper, blockPath, publicKeyFromHex } from 'nearbytes-log';
+import type { Hash } from 'nearbytes-crypto';
 import type { WebDavServer } from '../webdav/index.js';
 import type { DevInspectServer } from '../dev/index.js';
 import { debugEnabled } from '../debug.js';
@@ -204,10 +206,88 @@ export function attachSyncInboundRefresh(ctx: Context): () => void {
     if (debugEnabled('sync')) {
       debugLog('sync', 'event', formatSyncEventLine(event));
     }
-    if (event.kind === 'event-received') {
-      void refreshVolumesForChannel(ctx, event.channel.toLowerCase());
+    if (event.kind === 'block-received') {
+      void refreshAllOpenVolumes(ctx);
+    } else if (event.kind === 'event-received') {
+      void maybeRefreshAfterInboundEvent(ctx, event.channel.toLowerCase(), event.eventHash);
     }
   });
+}
+
+async function refreshAllOpenVolumes(ctx: Context): Promise<void> {
+  for (const secret of ctx.volumeRegistry.values()) {
+    const keyPair = await ctx.skeleton.crypto.deriveKeys(createSecret(secret));
+    const keyHex = bytesToHex(keyPair.publicKey);
+    if (!ctx.volumes.has(keyHex)) {
+      continue;
+    }
+    if (debugEnabled('sync')) {
+      debugLog('sync', 'files', `reload open volume channel=${keyHex.slice(0, 8)}…`);
+    }
+    await reloadVolumeFromDisk(ctx, secret);
+  }
+}
+
+/** Avoid flashing an empty `ls` when the event landed before its block blobs. */
+async function maybeRefreshAfterInboundEvent(
+  ctx: Context,
+  channelHex: string,
+  eventHash: string,
+): Promise<void> {
+  if (!(await inboundEventReadyToMaterialize(ctx, channelHex, eventHash))) {
+    return;
+  }
+  await refreshVolumesForChannel(ctx, channelHex);
+}
+
+async function inboundEventReadyToMaterialize(
+  ctx: Context,
+  channelHex: string,
+  eventHash: string,
+): Promise<boolean> {
+  const pk = publicKeyFromHex(channelHex);
+  if (pk === null) {
+    return false;
+  }
+  try {
+    const signed = await ctx.skeleton.log.events.retrieveEvent(pk, eventHash as Hash);
+    const refs = signed.envelope.blockRefs.map((h) => String(h).toLowerCase());
+    if (refs.length === 0) {
+      return true;
+    }
+    const known = new Set(
+      (await ctx.skeleton.log.events.listEvents(pk)).map((h) => h.toLowerCase()),
+    );
+    const headRef = refs[0]!;
+    const blockReady = async (hash: string): Promise<boolean> => {
+      if (await ctx.skeleton.log.blocks.has(hash as Hash)) {
+        return true;
+      }
+      try {
+        await access(join(ctx.config.dataDir, blockPath(hash as Hash)));
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (refs.length === 1) {
+      return blockReady(headRef);
+    }
+    if (!known.has(headRef)) {
+      return false;
+    }
+    for (const hash of refs.slice(1)) {
+      if (known.has(hash)) {
+        continue;
+      }
+      if (!(await blockReady(hash))) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function refreshVolumesForChannel(ctx: Context, channelHex: string): Promise<void> {

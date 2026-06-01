@@ -61,9 +61,9 @@ export function createWebDavAccess(ctx: Context): WebDavAccess {
       if (!wasAuthenticated && profile !== null) {
         ctx.webdavLastAuthAt = Date.now();
         ctx.webdavLastAuthProfile = profile.name;
-        console.error(
-          `[nearbytes-webdav] Client authenticated (profile "${profile.name}") — mount should work until profile use or webdav logout`,
-        );
+        if (debugEnabled('webdav')) {
+          console.error(`[nearbytes-webdav] client authenticated as profile "${profile.name}"`);
+        }
       }
     },
     checkAuth(header) {

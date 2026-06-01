@@ -13,7 +13,14 @@ import type { Secret } from 'nearbytes-crypto';
 import type { CryptoOperations } from 'nearbytes-crypto';
 import type { Log } from 'nearbytes-log';
 import { writable, type Readable } from 'nearbytes-skeleton';
-import { openVolume, materializeVolume, type Volume, type VolumeFileSystemState } from './volume.js';
+import type { MaterializedFileSystem } from './fileMaterializer.js';
+import {
+  openVolume,
+  materializeVolume,
+  volumeStateFromMaterialized,
+  type Volume,
+  type VolumeFileSystemState,
+} from './volume.js';
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -24,9 +31,11 @@ export interface ReactiveVolume extends Readable<VolumeFileSystemState> {
   readonly volume: Volume;
   /**
    * Re-materialises state from the event log and notifies subscribers.
-   * Call after any write, or when the watcher fires.
+   * Prefer {@link applyMaterialized} when replay state is already available.
    */
   refresh(): Promise<void>;
+  /** Updates subscribers from an already-materialized filesystem (no log I/O). */
+  applyMaterialized(fs: MaterializedFileSystem): void;
   /** `true` while a refresh is in progress (prevents concurrent refreshes). */
   readonly refreshing: boolean;
 }
@@ -71,6 +80,10 @@ export async function createReactiveVolume(
       } finally {
         refreshing = false;
       }
+    },
+
+    applyMaterialized(fs: MaterializedFileSystem): void {
+      store.set(volumeStateFromMaterialized(fs));
     },
 
     get refreshing(): boolean {

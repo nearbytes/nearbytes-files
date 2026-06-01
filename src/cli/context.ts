@@ -11,7 +11,9 @@ import {
   type VolumeWatcher,
   type NearbytesConfig,
 } from 'nearbytes-skeleton';
+import { join } from 'node:path';
 import { createSecret, bytesToHex } from 'nearbytes-crypto';
+import { defaultPathMapper } from 'nearbytes-log';
 import type { WebDavServer } from '../webdav/index.js';
 import type { DevInspectServer } from '../dev/index.js';
 
@@ -130,16 +132,21 @@ export function assertTimelineWritesAllowed(ctx: Context): void {
  * `timeline` / `ls` / WebDAV use `FileService`'s replay cache; the dataDir
  * watcher must invalidate it (see webdav-v1 §Projection — External sync).
  */
-export async function reloadVolumeFromDisk(ctx: Context, secret: string): Promise<void> {
+export async function reloadVolumeFromDisk(
+  ctx: Context,
+  secret: string,
+): Promise<import('../fileEmit.js').FileReplayContext> {
   ctx.fileService.markReplayStale(secret);
   ctx.lastTimelineEvents = null;
 
+  const replay = await ctx.fileService.getReplayContext(secret);
   const keyPair = await ctx.skeleton.crypto.deriveKeys(createSecret(secret));
   const keyHex = bytesToHex(keyPair.publicKey);
   const rv = ctx.volumes.get(keyHex);
-  if (rv !== undefined) await rv.refresh();
-
-  await ctx.fileService.getReplayContext(secret);
+  if (rv !== undefined) {
+    rv.applyMaterialized(replay.fs);
+  }
+  return replay;
 }
 
 export async function openAndWatch(
@@ -157,8 +164,11 @@ export async function openAndWatch(
   ctx.volumes.set(keyHex, rv);
 
   if (watch && !ctx.watchers.has(keyHex)) {
-    const watcher = createFilesystemWatcher(ctx.config.dataDir, {
-      refresh: () => reloadVolumeFromDisk(ctx, secret),
+    const channelDir = join(ctx.config.dataDir, defaultPathMapper(keyPair.publicKey));
+    const watcher = createFilesystemWatcher(channelDir, {
+      refresh: async () => {
+        await reloadVolumeFromDisk(ctx, secret);
+      },
     });
     ctx.watchers.set(keyHex, watcher);
   }
@@ -169,8 +179,9 @@ export async function openAndWatch(
 export async function refreshIfOpen(ctx: Context, secret: string): Promise<void> {
   const keyPair = await ctx.skeleton.crypto.deriveKeys(createSecret(secret));
   const keyHex = bytesToHex(keyPair.publicKey);
-  const rv = ctx.volumes.get(keyHex);
-  if (rv !== undefined) await rv.refresh();
+  if (!ctx.volumes.has(keyHex)) return;
+  const replay = await ctx.fileService.getReplayContext(secret);
+  ctx.volumes.get(keyHex)!.applyMaterialized(replay.fs);
 }
 
 /**
@@ -187,10 +198,6 @@ export function attachSyncInboundRefresh(ctx: Context): () => void {
   return ctx.skeleton.sync.onEvent((event) => {
     if (event.kind === 'event-received') {
       void refreshVolumesForChannel(ctx, event.channel.toLowerCase());
-      return;
-    }
-    if (event.kind === 'block-received') {
-      void refreshAllOpenVolumes(ctx);
     }
   });
 }
@@ -209,13 +216,3 @@ async function refreshVolumesForChannel(ctx: Context, channelHex: string): Promi
   }
 }
 
-async function refreshAllOpenVolumes(ctx: Context): Promise<void> {
-  for (const secret of ctx.volumeRegistry.values()) {
-    const keyPair = await ctx.skeleton.crypto.deriveKeys(createSecret(secret));
-    const keyHex = bytesToHex(keyPair.publicKey);
-    if (!ctx.volumes.has(keyHex)) {
-      continue;
-    }
-    await reloadVolumeFromDisk(ctx, secret);
-  }
-}

@@ -155,12 +155,6 @@ export async function cmdFileList(
   secret: string,
   pathArg?: string,
 ): Promise<void> {
-  const keyPair = await ctx.skeleton.crypto.deriveKeys(createSecret(secret));
-  const keyHex = bytesToHex(keyPair.publicKey);
-  if (ctx.volumes.has(keyHex)) {
-    await reloadVolumeFromDisk(ctx, secret);
-  }
-
   const target = pathArg === undefined ? ctx.remoteCwd : resolveRemotePath(ctx.remoteCwd, pathArg);
   const [files, dirs] = await Promise.all([
     ctx.fileService.listFiles(secret),
@@ -480,8 +474,7 @@ export async function cmdRefresh(ctx: Context): Promise<void> {
   }
   const secret = ctx.volumeRegistry.get(ctx.volumeSessionActive);
   if (secret === undefined) throw new Error('Active volume is not registered');
-  await reloadVolumeFromDisk(ctx, secret);
-  const replay = await ctx.fileService.getReplayContext(secret);
+  const replay = await reloadVolumeFromDisk(ctx, secret);
   console.log(
     green(`✓ Refreshed — ${replay.fs.files.size} file(s), ${replay.orderedEntries.length} event(s)`),
   );

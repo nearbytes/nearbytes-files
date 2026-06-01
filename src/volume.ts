@@ -8,6 +8,7 @@ import {
   verifyEventLog,
 } from 'nearbytes-log';
 import type { DirectoryMetadata } from './fileEvents.js';
+import type { MaterializedFileSystem } from './fileMaterializer.js';
 import { toCanonicalEntries } from './fileLogEntries.js';
 import { runMaterialization } from './materialization.js';
 
@@ -65,6 +66,23 @@ export function replayEvents(entries: EventLogEntry[]): VolumeFileSystemState {
     });
   }
 
+  return { files, directories: new Map(fs.directories) };
+}
+
+/** Projects {@link MaterializedFileSystem} into {@link VolumeFileSystemState} (same shape as {@link replayEvents}). */
+export function volumeStateFromMaterialized(fs: MaterializedFileSystem): VolumeFileSystemState {
+  const files = new Map<string, VolumeFileMetadata>();
+  for (const [, meta] of fs.files) {
+    const origin = fs.fileOrigins.get(meta.path);
+    if (origin === undefined) {
+      throw new Error(`Materialized file "${meta.path}" has no originating CREATE_FILE event`);
+    }
+    files.set(meta.path, {
+      path: meta.path,
+      contentAddress: meta.blobHash as Hash,
+      eventHash: origin as Hash,
+    });
+  }
   return { files, directories: new Map(fs.directories) };
 }
 

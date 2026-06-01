@@ -130,13 +130,6 @@ export async function cmdVolumeList(ctx: Context): Promise<void> {
 
 export async function restoreVolumeSession(ctx: Context): Promise<void> {
   await loadVolumeRegistryFromDisk(ctx);
-  for (const [, secret] of ctx.volumeRegistry) {
-    try {
-      await openAndWatch(ctx, secret, true);
-    } catch {
-      // keep registration even when channel is empty
-    }
-  }
   if (ctx.volumeSessionActive !== null) {
     const secret = ctx.volumeRegistry.get(ctx.volumeSessionActive);
     if (secret !== undefined) {

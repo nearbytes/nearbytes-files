@@ -33,7 +33,7 @@ Volume handling mirrors sync **profiles** (`profile add` / `profile use`):
 | `volume add <name> <secret>` | Register `name` → `secret` in session retention, open the channel, add to the **open** set. If no active volume, set active to this volume. `name` SHOULD equal the secret prefix but MAY differ (stored mapping). |
 | `volume use <name>` | Set **active** volume to a registered entry. MUST fail if `name` is not registered. Does not prompt for a secret. |
 | `volume forget <name>` | Remove from retention and open set; stop watcher; close in-memory state. If active, clear active (no auto-pick of another volume). |
-| `volume list` | List registered volumes; mark active with `▶`. |
+| `volume list` | List **registered** volumes; mark active with `▶`. Entries not open in this process MAY show `(registered, not open)`. |
 
 Aliases:
 
@@ -41,8 +41,8 @@ Aliases:
   activation when `<prefix>` is derived from the secret.
 - `use <name>` is an alias for `volume use <name>` once registered.
 - `forget <name>` is an alias for `volume forget <name>`.
-- `volumes` lists the **open** set in the current process (same as registered
-  after restore).
+- `volumes` lists the **open** set in the current process (not every registered
+  name after restore).
 
 `volume add` is the only command that reads a new secret from the REPL line
 during normal operation. After registration, `volume use` and WebDAV path lookup
@@ -65,8 +65,10 @@ use the stored mapping.
 }
 ```
 
-4. On REPL start, implementations SHOULD load this file and open every listed
-   volume (same as config auto-open, but session-scoped secrets live here).
+4. On REPL start, implementations SHOULD load this file, restore the registry,
+   and open **only the active volume** when `active` is set. Other registered
+   volumes stay in the retention file but are not opened until `volume use` or
+   `volume add`.
 5. `volume add` / `volume forget` MUST update the file atomically.
 6. Timeline cursor state MUST NOT be persisted in v1 (see §5).
 
@@ -88,3 +90,18 @@ session retention is the source of truth for “what is open” across REPL runs
 2. Mode `0600` is mandatory; loaders SHOULD refuse looser permissions (same
    policy as `config.json` in nearbytes-skeleton).
 3. Without a registered secret, no channel data is exposed via REPL or WebDAV.
+
+## 7. Open volumes, watchers, and co-located sync
+
+When a volume is **open** in the REPL process:
+
+1. A filesystem watcher SHOULD observe only that volume's channel directory
+   (`channels/<pubkey-hex>/` under `dataDir`), not the entire storage root.
+2. When this process owns the sync engine, an inbound `event-received` for
+   channel `C` MUST refresh replay state only for **open** volumes whose channel
+   public key equals `C`. Registered-but-not-open volumes MUST NOT be replayed.
+3. `ls`, `timeline`, and WebDAV reads on an open channel MUST use the in-memory
+   replay cache (`file-events-v0.5.md` §11, `webdav-v1.md` §7) and MUST NOT
+   force a full channel reload from disk on every listing when the cache is warm.
+4. `refresh` (REPL) or stale cache after external writes MAY reload incrementally
+   (merge only new event hashes when the causal prefix is preserved).

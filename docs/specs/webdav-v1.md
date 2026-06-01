@@ -1,120 +1,134 @@
-# webdav-v1 — local HTTPS mount per volume
+# webdav-v1 — local HTTPS projection for FILES volumes
 
-**Mount and auth:** superseded for the `nbf` REPL by `webdav-v2.md` (single root,
-registered volumes, global Basic tied to sync profile). Transport, debug, replay
-cache, PROPFIND sizes, and live-head write mapping below remain normative.
+Status: normative for transport, replay cache, and live-head write mapping.
+**REPL mount and auth** are superseded by `application/webdav-v2.md`.
 
-Normative package summary. Design notes: `nearbytes-design/design/webdav-v1.md`.
-Normative cross-repo spec: `nearbytes-specs/application/webdav-v1.md`.
+Design: `nearbytes-design/design/webdav-v1.md`.
+Package summary: `nearbytes-files/docs/specs/webdav-v1.md`.
 
-## Transport
+## 1. Scope
 
-- **HTTPS only**, bind **`127.0.0.1`** (default port `9843`).
-- TLS cert: `~/.nearbytes/webdav/tls.pem` + `tls-key.pem` (`0600`), minted on first start (`selfsigned`, CN `nearbytes-files-local`).
+This document specifies how a conforming implementation exposes a FILES volume
+over WebDAV for local OS mounts (Finder, Explorer, etc.). It does not change
+FILES event semantics; see `application/file-events-v0.5.md`.
 
-## CLI options
+## 2. Transport And Binding
 
-WebDAV starts with **`nbf`** / **`nbf repl`** (interactive REPL) or **`node scripts/webdav-serve.mjs`** (server only).
+1. Implementations MUST serve WebDAV over **HTTPS**.
+2. The default bind address MUST be **`127.0.0.1`** (localhost only).
+3. The default port SHOULD be **`9843`** and MAY be overridden by `--webdav-port`.
+4. TLS credentials MAY be locally generated self-signed certificates stored under
+   the user's Nearbytes config directory.
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--webdav-port <port>` | `9843` | TCP port for the local HTTPS WebDAV listener. |
-| `--debug [areas]` | off | Enable debug logging. Omit `areas` to turn on **all** areas below. Otherwise pass a comma-separated list (spaces are trimmed; case-insensitive). |
+## 3. Volume URL And Authentication
 
-### `--debug` areas
-
-| Area | Output |
-|------|--------|
-| `cli` | Stack traces and verbose diagnostics on CLI/REPL command errors (`nbf` only). |
-| `webdav` | One line per WebDAV request (method, URL, path, `Depth`, `Destination`) and one line per response (status, elapsed ms). |
-| `timing` | Per-request handler stage timings (`readBody`, `snapshotForSecret`, `getFileByPath`, …) and replay timing when a cold or stale refresh runs. |
-
-Examples:
-
-```bash
-nbf --debug                          # all areas
-nbf --debug webdav,timing            # WebDAV + replay timing only
-nbf --debug cli --webdav-port 9844   # CLI errors only, alternate port
-node scripts/webdav-serve.mjs --debug webdav,timing
-```
-
-Other global `nbf` flags (`-c`, `-d`, `-m`) are unchanged; see `nbf help` in the REPL.
-
-## Auth & volume URL
-
-One OS mount = one volume:
+Mount URL shape:
 
 ```text
-https://127.0.0.1:<port>/<volumeName>/…
+https://<host>:<port>/<volumeName>/…
 ```
 
-**HTTP Basic:** `username = volumeName`, `password` = secret password → channel secret `volumeName:password` → `deriveKeys` (same as `nbf`). First URL segment must equal `username`.
+1. `volumeName` MUST equal the HTTP Basic **username**.
+2. The HTTP Basic **password** MUST be the secret password part (not the full
+   `volumeName:password` string in the password field).
+3. The effective channel secret MUST be `volumeName:password`, identical to
+   other Nearbytes file tools.
+4. Wrong credentials MUST NOT expose another volume's history (empty channel or
+   decrypt failure only).
 
-Wrong password: empty channel or decrypt failure; no cross-volume leakage.
+## 4. Operation Mapping
 
-## Operations
+| WebDAV method | FILES operation |
+|---------------|-----------------|
+| `PROPFIND` | List materialized directories and files |
+| `GET` | Read live file bytes |
+| `HEAD` | File metadata without body |
+| `PUT` | `CREATE_FILE` (create or replace) |
+| `DELETE` | `DELETE` |
+| `MKCOL` | `MKDIR` |
+| `MOVE` | `RENAME` |
+| `LOCK` / `UNLOCK` | Compatibility no-op (non-blocking) |
 
-Maps to `FileService` via `fileEmit` (FILES `blockRefs` v0.5). `ETag` SHOULD be
-a quoted FILES event hash: file resources use their live entry head, while
-collection resources use the current channel replay head unless a future
-implementation computes a narrower directory-listing head. This keeps implicit
-directories and listing changes covered without inventing non-event validators.
-A client `If-Match` value is therefore the previous event/version the client
-claims to have observed. Writes do not fail on `If-Match`: the server commits a
-new FILES event whose semantic parent is the actual observed log head at commit
-time. If the client validator is retained, it belongs in optional encrypted
-metadata such as `clientObservedEtag`, not in cleartext typed envelope fields.
+All writes MUST go through the same code path as the `FileService` API. A
+separate shadow filesystem or side-channel write log is NOT conforming.
 
-Clear `blockRefs` include direct predecessor event refs and previous-content
-blocks for exact-path file overwrites/deletes/moves. This is enough for
-previous-version and conflict tooling without expanding directory cascades.
+## 5. ETags And Preconditions
 
-WebDAV `LOCK`/`UNLOCK` are compatibility acknowledgements for clients such as
-Finder. They MUST NOT become blocking application-level locks. Writes still
-commit as FILES events whose causal order is represented by observed-log-head
-dependencies; conflicts are resolved by v0.5 replay.
+1. Live **file** resources SHOULD expose an `ETag` equal to the quoted event hash
+   of the live entry head for that path.
+2. **Collection** resources SHOULD expose an `ETag` derived from the channel
+   replay head unless a future revision defines a narrower directory head.
+3. `If-Match` MAY be accepted as client intent but MUST NOT cause `412`
+   responses that block writes. The semantic parent of a write is the observed
+   log head at commit time per FILES v0.5.
+4. Client-observed validators MAY be stored in encrypted metadata (e.g.
+   `clientObservedEtag`), not as cleartext envelope fields.
 
-## Projection And In-Memory Channel Replay
+## 6. PROPFIND Content Length
 
-WebDAV reads a per-secret **in-memory channel replay** owned by `FileService`, not
-the raw on-disk log on every request.
+macOS and other WebDAV clients use `D:getcontentlength` from `PROPFIND` for file
+size display and copy.
 
-### Cache contents
+1. Implementations MUST report the **plaintext** byte length of live file content
+   for non-empty files.
+2. Because `CREATE_FILE` payloads do not yet normatively carry plaintext size,
+   implementations MAY derive size from:
+   - an in-process cache populated on write (keyed by content block hash); and/or
+   - one-time decryption of the live blob when size is unknown (WebDAV-only
+     enrichment).
+3. `HEAD` SHOULD include `Content-Length` when size is known.
 
-For each channel secret the implementation keeps a `FileReplayContext`:
+## 7. In-Memory Channel Replay (Implementation Requirement)
 
-- **ordered hydrated entries** — causally ordered `EventLogEntry` values (payload already decrypted);
-- **materialized filesystem** — `MaterializedFileSystem` from FILES v0.5 replay;
-- **live decryption keys** — wrapped file keys indexed by live path;
-- **observed channel head** — last FILES event hash in replay order.
+WebDAV latency MUST NOT require reloading and re-decrypting the entire channel
+from disk on every request.
 
-### Lifecycle
+Conforming implementations MUST maintain per channel secret:
 
-| Phase | Behavior |
-|-------|----------|
-| **Cold open** | First `getReplayContext` for a secret loads event hashes from storage, hydrates payloads, verifies signatures, topologically orders, and materializes. Cost is **O(n)** in channel event count. |
-| **Warm read** | Subsequent `getReplayContext` returns the cached context with **no disk I/O** (`timeline`, `ls`, WebDAV `PROPFIND`/`GET`). |
-| **Local write** | After `emitFileEvent`, the new entry is appended in memory via `extendFileReplayContext` and incremental materialization over **only** the new entries. The full channel MUST NOT be reloaded from disk. |
-| **External sync** | When another process appends to the same `dataDir`, the implementation calls `markReplayStale`. The next read merges **only new event hashes** from disk into the in-memory log, then re-materializes incrementally when the ordered prefix is preserved. |
+1. causally ordered **hydrated** event entries;
+2. the materialized FILES snapshot derived from those entries;
+3. data required to decrypt live file content (e.g. wrapped keys by path).
 
-These steps are performance optimizations. Implementations MUST preserve the same
-live filesystem state as a full canonical replay from storage.
+### 7.1 Warm reads
 
-### PROPFIND sizes
+After the channel has been opened in a process, `PROPFIND`, `GET`, `HEAD`, and
+equivalent CLI reads MUST be servable from the in-memory replay without
+re-executing `loadEventLog` for the full channel.
 
-macOS WebDAV clients use `getcontentlength` from `PROPFIND` (not only `GET`).
-`CREATE_FILE` inner payloads do not yet carry plaintext length. Implementations
-SHOULD:
+### 7.2 Local writes
 
-1. record plaintext size in an in-process cache keyed by content block hash on write;
-2. apply cached sizes to materialized file metadata on replay; and
-3. for WebDAV reads only, MAY decrypt live blobs once when size is still unknown
-   (`enrichSizes`).
+After a locally emitted FILES event, implementations MUST append the new hydrated
+entry to the in-memory log and update materialized state incrementally. They MUST
+NOT force a full channel reload from disk solely because of that write.
 
-`HEAD` SHOULD send `Content-Length` when the materialized size is known.
+### 7.3 External changes
 
-## Lifecycle
+When storage may have changed under another process (sync daemon, second CLI,
+or the co-located sync engine writing into `channels/<pubkey>/`), implementations
+MUST refresh the in-memory log before serving stale state. Refresh SHOULD load
+and verify **only event hashes not already cached** when the causal ordered
+prefix is preserved.
 
-Started with **`nbf` REPL / default shell** (not one-shot CLI). Stopped on REPL exit (`flushAndStop`). Shares `dataDir` with `nbsync` like the CLI.
+In a REPL that owns the sync engine, inbound `event-received` notifications MUST
+mark the matching channel's replay cache stale and refresh **open** volumes for
+that channel only (`volume-session-v1.md` §7). Content `block-received` events do
+not change the materialized file listing and MUST NOT trigger full replay of every
+open volume.
 
-Debug and port are configured only via **`--debug`** and **`--webdav-port`** (not environment variables).
+### 7.4 Equivalence
+
+All caching and incremental strategies MUST be observationally equivalent to full
+canonical replay from storage.
+
+## 8. Debug And Configuration
+
+1. Debug logging MUST be controlled by CLI flags, not environment variables.
+2. `--debug [areas]` where `areas` is a comma-separated subset of:
+   `cli`, `webdav`, `timing`. Omitting `areas` enables all.
+3. `timing` covers replay refresh and per-request WebDAV stage timings.
+
+## 9. Lifecycle
+
+1. WebDAV MAY start automatically with the interactive `nbf` REPL.
+2. WebDAV MUST stop when the hosting REPL or standalone server process exits.
+3. WebDAV shares the same `dataDir` as `nbf` and `nbsync`.

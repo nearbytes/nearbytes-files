@@ -63,7 +63,7 @@
     "commander": "^12.0.0",
     "nearbytes-crypto": "github:nearbytes/nearbytes-crypto#6859719510764702844882b8488b35ab31f20145",
     "nearbytes-log": "github:nearbytes/nearbytes-log#96d579f37b8c9d74d19a62f8019dd415e82b079e",
-    "nearbytes-skeleton": "github:nearbytes/nearbytes-skeleton#6e58a2317b0acbb9ada89159603d7621fffece7b",
+    "nearbytes-skeleton": "github:nearbytes/nearbytes-skeleton#8fd6d567aca35bf960b44ef05e12ed5fd27aa3ba",
     "selfsigned": "^5.5.0"
   },
   "devDependencies": {

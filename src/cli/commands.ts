@@ -155,6 +155,12 @@ export async function cmdFileList(
   secret: string,
   pathArg?: string,
 ): Promise<void> {
+  const keyPair = await ctx.skeleton.crypto.deriveKeys(createSecret(secret));
+  const keyHex = bytesToHex(keyPair.publicKey);
+  if (ctx.volumes.has(keyHex)) {
+    await reloadVolumeFromDisk(ctx, secret);
+  }
+
   const target = pathArg === undefined ? ctx.remoteCwd : resolveRemotePath(ctx.remoteCwd, pathArg);
   const [files, dirs] = await Promise.all([
     ctx.fileService.listFiles(secret),

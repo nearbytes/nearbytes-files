@@ -52,7 +52,6 @@
     "probe:offline-reopen": "yarn build && node scripts/offline-reopen-probe.mjs",
     "probe:false-cursor": "yarn build && node scripts/false-cursor-probe.mjs",
     "probe:late-join-delete": "yarn build && node scripts/late-join-delete-probe.mjs",
-    "probe:sync-replay-refresh": "yarn build && node scripts/sync-replay-refresh-probe.mjs",
     "probe:remote-joins": "yarn build && node scripts/remote-joins-probe.mjs",
     "update": "node scripts/update.mjs"
   },

@@ -185,36 +185,14 @@ export function attachSyncInboundRefresh(ctx: Context): () => void {
   }
 
   return ctx.skeleton.sync.onEvent((event) => {
-    if (event.kind === 'peer-connected') {
-      void markRegisteredVolumesStale(ctx);
-      return;
-    }
     if (event.kind === 'event-received') {
       void refreshVolumesForChannel(ctx, event.channel.toLowerCase());
       return;
     }
     if (event.kind === 'block-received') {
-      void refreshAllRegisteredVolumes(ctx);
+      void refreshAllOpenVolumes(ctx);
     }
   });
-}
-
-/**
- * Invalidate replay for every registered volume without loading from disk.
- * A full reload on `peer-connected` races ahead of inbound events and freezes
- * `ls` until the next manual refresh; `ls` / `event-received` load when needed.
- */
-async function markRegisteredVolumesStale(ctx: Context): Promise<void> {
-  for (const secret of ctx.volumeRegistry.values()) {
-    ctx.fileService.markReplayStale(secret);
-    ctx.lastTimelineEvents = null;
-    const keyPair = await ctx.skeleton.crypto.deriveKeys(createSecret(secret));
-    const keyHex = bytesToHex(keyPair.publicKey);
-    const rv = ctx.volumes.get(keyHex);
-    if (rv !== undefined) {
-      await rv.refresh();
-    }
-  }
 }
 
 async function refreshVolumesForChannel(ctx: Context, channelHex: string): Promise<void> {
@@ -223,13 +201,21 @@ async function refreshVolumesForChannel(ctx: Context, channelHex: string): Promi
     if (bytesToHex(keyPair.publicKey).toLowerCase() !== channelHex) {
       continue;
     }
+    const keyHex = bytesToHex(keyPair.publicKey);
+    if (!ctx.volumes.has(keyHex)) {
+      continue;
+    }
     await reloadVolumeFromDisk(ctx, secret);
   }
 }
 
-/** Reload every registered volume (inbound blocks/events for any channel). */
-async function refreshAllRegisteredVolumes(ctx: Context): Promise<void> {
+async function refreshAllOpenVolumes(ctx: Context): Promise<void> {
   for (const secret of ctx.volumeRegistry.values()) {
+    const keyPair = await ctx.skeleton.crypto.deriveKeys(createSecret(secret));
+    const keyHex = bytesToHex(keyPair.publicKey);
+    if (!ctx.volumes.has(keyHex)) {
+      continue;
+    }
     await reloadVolumeFromDisk(ctx, secret);
   }
 }

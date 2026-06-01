@@ -22,6 +22,7 @@ import { createSecret, type Secret } from 'nearbytes-crypto';
 import { cachedBlobPlaintextSize, rememberBlobPlaintextSize } from './fileBlobSizes.js';
 import { decryptFileForVolume } from './fileCrypto.js';
 import { debugEnabled } from './debug.js';
+import { debugLog } from './debugLog.js';
 import { runMaterialization } from './materialization.js';
 
 export interface CausalLineage {
@@ -117,8 +118,10 @@ export async function loadFileReplayContext(
   if (timing) {
     const afterMaterialize = performance.now();
     const round = (value: number) => Math.round(value * 10) / 10;
-    console.error(
-      `[nearbytes-webdav][timing] replay open=${round(afterOpen - started)}ms load=${round(afterLoad - afterOpen)}ms` +
+    debugLog(
+      'timing',
+      'replay',
+      `open=${round(afterOpen - started)}ms load=${round(afterLoad - afterOpen)}ms` +
         ` materialize=${round(afterMaterialize - afterLoad)}ms entries=${orderedEntries.length} loaded=${loadedCount}`,
     );
   }

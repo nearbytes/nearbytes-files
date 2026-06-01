@@ -124,8 +124,11 @@ canonical replay from storage.
 
 1. Debug logging MUST be controlled by CLI flags, not environment variables.
 2. `--debug [areas]` where `areas` is a comma-separated subset of:
-   `cli`, `webdav`, `timing`. Omitting `areas` enables all.
+   `cli`, `webdav`, `timing`, `sync`. Omitting `areas` enables all.
 3. `timing` covers replay refresh and per-request WebDAV stage timings.
+4. `sync` covers wire protocol (`have`/`want`/`delta`), sync lifecycle events,
+   and open-volume replay refresh after inbound `event-received`. All debug
+   lines are timestamped (ISO-8601 UTC).
 
 ## 9. Lifecycle
 

@@ -7,6 +7,7 @@ import { normalizeVolumePath } from '../pathUtils.js';
 import type { WebDavAccess } from './access.js';
 import { logWebDavAuthFailure } from './access.js';
 import { debugEnabled } from '../debug.js';
+import { debugLog } from '../debugLog.js';
 import { lockDiscovery, multistatus, responseHref } from './xml.js';
 import { snapshotViewLastModified, webDavResourceEtag } from './viewEpoch.js';
 
@@ -73,8 +74,10 @@ function debugStage(
 ): void {
   if (!debugEnabled('timing')) return;
   const elapsed = Math.round((performance.now() - started) * 10) / 10;
-  console.error(
-    `[nearbytes-webdav][timing] ${req.method ?? 'UNKNOWN'} path=${JSON.stringify(inner)} stage=${stage} ${elapsed}ms`,
+  debugLog(
+    'timing',
+    'webdav',
+    `${req.method ?? 'UNKNOWN'} path=${JSON.stringify(inner)} stage=${stage} ${elapsed}ms`,
   );
 }
 
@@ -84,8 +87,10 @@ function debugRequest(req: IncomingMessage, label: string): void {
   const destination = Array.isArray(req.headers.destination)
     ? req.headers.destination[0]
     : req.headers.destination;
-  console.error(
-    `[nearbytes-webdav] ${new Date().toISOString()} ${req.method ?? 'UNKNOWN'} ${req.url ?? '/'} path=${JSON.stringify(label)}` +
+  debugLog(
+    'webdav',
+    'request',
+    `${req.method ?? 'UNKNOWN'} ${req.url ?? '/'} path=${JSON.stringify(label)}` +
       (depth !== undefined ? ` depth=${depth}` : '') +
       (destination !== undefined ? ` destination=${destination}` : ''),
   );
@@ -96,8 +101,10 @@ function debugResponse(req: IncomingMessage, res: ServerResponse, label: string)
   const started = performance.now();
   res.once('finish', () => {
     const elapsed = Math.round((performance.now() - started) * 10) / 10;
-    console.error(
-      `[nearbytes-webdav] ${new Date().toISOString()} -> ${res.statusCode} ${req.method ?? 'UNKNOWN'} path=${JSON.stringify(label)} ${elapsed}ms`,
+    debugLog(
+      'webdav',
+      'response',
+      `-> ${res.statusCode} ${req.method ?? 'UNKNOWN'} path=${JSON.stringify(label)} ${elapsed}ms`,
     );
   });
 }

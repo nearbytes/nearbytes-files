@@ -16,6 +16,9 @@ import { createSecret, bytesToHex } from 'nearbytes-crypto';
 import { defaultPathMapper } from 'nearbytes-log';
 import type { WebDavServer } from '../webdav/index.js';
 import type { DevInspectServer } from '../dev/index.js';
+import { debugEnabled } from '../debug.js';
+import { debugLog } from '../debugLog.js';
+import { formatSyncEventLine, installSyncDebugBridge } from '../syncDebugBridge.js';
 
 export interface Context {
   config: NearbytesConfig;
@@ -63,6 +66,7 @@ export async function createContext(
   config: NearbytesConfig,
   options?: CreateContextOptions,
 ): Promise<Context> {
+  installSyncDebugBridge();
   const skeleton = await createFilesystemSkeletonFromConfig(config);
   const fileService = createFileService({ log: skeleton.log, crypto: skeleton.crypto });
   const volumes = new Map<string, ReactiveVolume>();
@@ -196,6 +200,9 @@ export function attachSyncInboundRefresh(ctx: Context): () => void {
   }
 
   return ctx.skeleton.sync.onEvent((event) => {
+    if (debugEnabled('sync')) {
+      debugLog('sync', 'event', formatSyncEventLine(event));
+    }
     if (event.kind === 'event-received') {
       void refreshVolumesForChannel(ctx, event.channel.toLowerCase());
     }
@@ -211,6 +218,9 @@ async function refreshVolumesForChannel(ctx: Context, channelHex: string): Promi
     const keyHex = bytesToHex(keyPair.publicKey);
     if (!ctx.volumes.has(keyHex)) {
       continue;
+    }
+    if (debugEnabled('sync')) {
+      debugLog('sync', 'files', `reload open volume channel=${channelHex.slice(0, 8)}…`);
     }
     await reloadVolumeFromDisk(ctx, secret);
   }

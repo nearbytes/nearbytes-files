@@ -4,6 +4,7 @@ import { parseBasicAuth } from './auth.js';
 import { profileWebDavPassword } from '../cli/volumeSessionStore.js';
 import { webDavViewPath, type WebDavViewState } from '../cli/webdavViewState.js';
 import { debugEnabled } from '../debug.js';
+import { debugLog } from '../debugLog.js';
 
 function cursorEpochToken(cursorHash: string | null): string {
   if (cursorHash === null) return 'live';
@@ -62,7 +63,7 @@ export function createWebDavAccess(ctx: Context): WebDavAccess {
         ctx.webdavLastAuthAt = Date.now();
         ctx.webdavLastAuthProfile = profile.name;
         if (debugEnabled('webdav')) {
-          console.error(`[nearbytes-webdav] client authenticated as profile "${profile.name}"`);
+          debugLog('webdav', 'auth', `client authenticated as profile "${profile.name}"`);
         }
       }
     },
@@ -142,5 +143,5 @@ export function describeWebDavAuthFailure(
 
 export function logWebDavAuthFailure(access: WebDavAccess, authHeader: string | undefined): void {
   if (!debugEnabled('webdav')) return;
-  console.error(`[nearbytes-webdav] auth failed: ${describeWebDavAuthFailure(access, authHeader)}`);
+  debugLog('webdav', 'auth', `failed: ${describeWebDavAuthFailure(access, authHeader)}`);
 }

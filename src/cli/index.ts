@@ -109,8 +109,10 @@ program.hook('preAction', (thisCommand) => {
  */
 function printDevInspectBanner(server: { baseUrl: string }): void {
   console.error(`Dev inspect: ${server.baseUrl}/`);
+  console.error('  GET /api — route list');
+  console.error('  GET|POST /cmd?line=<repl-line> — same commands as this REPL (ls, peers, refresh, …)');
   console.error(
-    '  GET /health  /volumes  /view  /replay/<vol>?at=live|<#>|<hash>|cursor',
+    '  GET /health  /help  /volumes  /view  /sync/summary  /replay/<vol>?at=live|<#>|<hash>',
   );
 }
 

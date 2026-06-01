@@ -107,10 +107,12 @@ export async function createContext(
 
   if (options?.devInspectPort !== undefined) {
     const { startDevInspectServer } = await import('../dev/index.js');
+    const { createReplCommandRunner } = await import('./replExec.js');
     ctx.devInspect = await startDevInspectServer({
       dataDir: config.dataDir,
       fileService,
       port: options.devInspectPort,
+      runCommand: createReplCommandRunner(ctx),
     });
   }
 
@@ -183,6 +185,10 @@ export function attachSyncInboundRefresh(ctx: Context): () => void {
   }
 
   return ctx.skeleton.sync.onEvent((event) => {
+    if (event.kind === 'peer-connected') {
+      void refreshAllRegisteredVolumes(ctx);
+      return;
+    }
     if (event.kind === 'event-received') {
       void refreshVolumesForChannel(ctx, event.channel.toLowerCase());
       return;
@@ -214,6 +220,13 @@ async function refreshAllOpenVolumes(ctx: Context): Promise<void> {
     if (!ctx.volumes.has(keyHex)) {
       continue;
     }
+    await reloadVolumeFromDisk(ctx, secret);
+  }
+}
+
+/** Reload every registered volume (used when a peer comes online). */
+async function refreshAllRegisteredVolumes(ctx: Context): Promise<void> {
+  for (const secret of ctx.volumeRegistry.values()) {
     await reloadVolumeFromDisk(ctx, secret);
   }
 }

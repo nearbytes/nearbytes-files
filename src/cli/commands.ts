@@ -1004,8 +1004,9 @@ ${cyan('WebDAV (local mount)')}
   webdav refresh                         Bump ETags so Finder/Explorer/gvfs pick up timeline changes
   webdav logout                          Force Finder to re-authenticate
 
-${cyan('Dev inspect (read-only HTTP JSON — when started with --dev-inspect or yarn dev)')}
-  ${dim('GET')} /health /volumes /view   ${dim('session + timeline view state')}
+${cyan('Dev inspect (HTTP — when started with --dev-inspect or yarn dev)')}
+  ${dim('GET|POST')} /cmd?line=…           ${dim('run any REPL command; JSON {"line":"ls"} on POST')}
+  ${dim('GET')} /help /health /volumes /view /sync/summary
   ${dim('GET')} /replay/<vol>?at=…       ${dim('at=live | <#> | <hash> | cursor (webdav-view.json)')}
 
 ${cyan('Profiles (sync keypairs — many served in parallel)')}

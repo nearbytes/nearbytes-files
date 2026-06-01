@@ -94,7 +94,7 @@ import { installReplInterruptHandlers } from './replTerminal.js';
 // Tokeniser (bash-style; identical semantics to before)
 // ---------------------------------------------------------------------------
 
-function tokenise(line: string): string[] {
+export function tokeniseReplLine(line: string): string[] {
   const tokens: string[] = [];
   let current = '';
   let hasToken = false;
@@ -153,7 +153,7 @@ function tokenise(line: string): string[] {
   return tokens;
 }
 
-class ExitReplSignal extends Error {
+export class ExitReplSignal extends Error {
   override readonly name = 'ExitReplSignal';
 }
 
@@ -203,7 +203,15 @@ function resolveSecret(ctx: Context, override: string | undefined): string {
 // Dispatcher
 // ---------------------------------------------------------------------------
 
-async function dispatch(ctx: Context, tokens: string[], rl: readline.Interface): Promise<void> {
+/**
+ * Same command dispatcher as the interactive REPL. When `rl` is omitted (dev API),
+ * monitor uses non-TTY snapshot mode.
+ */
+export async function runReplDispatch(
+  ctx: Context,
+  tokens: string[],
+  rl?: readline.Interface,
+): Promise<void> {
   if (tokens.length === 0) return;
 
   /**
@@ -517,7 +525,7 @@ async function dispatch(ctx: Context, tokens: string[], rl: readline.Interface):
        * `off`, `start`, `stop`) so the user can disambiguate when
        * the toggle would otherwise hide the panel they want to see.
        */
-      await cmdMonitor(ctx, { rl, args: rest });
+      await cmdMonitor(ctx, { ...(rl !== undefined ? { rl } : {}), args: rest });
       return;
 
     case 'friend': {
@@ -682,7 +690,7 @@ export async function startRepl(ctx: Context, opts: StartReplOptions = {}): Prom
     dispatchChain = dispatchChain.then(async () => {
       let tokens: string[];
       try {
-        tokens = tokenise(line);
+        tokens = tokeniseReplLine(line);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(red(`✗ ${msg}`));
@@ -695,7 +703,7 @@ export async function startRepl(ctx: Context, opts: StartReplOptions = {}): Prom
       }
 
       try {
-        await dispatch(ctx, tokens, rl);
+        await runReplDispatch(ctx, tokens, rl);
         rl.prompt();
       } catch (err) {
         if (err instanceof ExitReplSignal) {

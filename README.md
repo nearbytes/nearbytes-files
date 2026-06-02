@@ -13,30 +13,60 @@ yarn repl
 
 That is the minimal local run path.
 
+Inside the REPL, run this first-time setup:
+
+```text
+# 1) Create and activate a sync profile (pick any strong secret)
+profile add myprofile "your profile secret words"
+profile use myprofile
+
+# 2) Register any volume secret and open it
+#    (this SAME command is used for both "create" and "join")
+volume add myvol "myvol:strong-password"
+volume use myvol
+file add ./hello.txt
+ls
+```
+
+To use a volume someone shared with you, do the same command with their secret:
+
+```text
+volume add teamdocs "shared-name:shared-password"
+volume use teamdocs
+ls
+```
+
+To sync with someone, exchange profile public keys and add them as a friend:
+
+- Send them: **your profile public key** (hex), from `profile list`.
+- Receive from them: **their profile public key** (hex).
+- Then add their key locally with `friend add ...` (they should do the same with yours if you want bidirectional carriage).
+
+```text
+profile list
+friend add <their-profile-public-key-hex>
+friends
+```
+
 ## Setup
 
-Internal deps (`nearbytes-crypto`, `nearbytes-log`, `nearbytes-skeleton`, …) are pinned in `package.json` as `github:nearbytes/<pkg>#<commit-sha>` and resolved by `yarn install` — there is no sibling-checkout requirement. Yarn 4.15 (Corepack-managed via the `packageManager` field) fetches each pinned commit, runs its `prepack: tsc`, and caches the resulting tarball in `yarn.lock`.
-
-First-time bootstrap (macOS, Linux, Windows; needs Node 18+ and Git):
+For normal usage, setup is just:
 
 ```sh
-git clone https://github.com/nearbytes/nearbytes-files.git
-cd nearbytes-files
 yarn install
 yarn repl
 ```
 
-That's it — no other Nearbytes repos need to be checked out locally.
+Needs Node 18+ and Git. No sibling checkout of other Nearbytes repos is required.
 
-When something in another Nearbytes repo's `main` moves, refresh internal deps to the latest published commits:
+### Maintainers only: dependency bumping
 
-```sh
-yarn update
-```
+`yarn install` and `yarn update` are different:
 
-This bumps every `github:nearbytes/<pkg>#<sha>` entry in `package.json` to the current HEAD of its `main` branch on GitHub and re-runs `yarn install`. Commit the resulting `package.json` + `yarn.lock` to publish the new combination.
+- `yarn install` installs exactly what is already pinned in `package.json` / `yarn.lock`.
+- `yarn update` changes dependency versions/ranges and rewrites the lockfile.
 
-When pushing changes to multiple Nearbytes repos at once, run `yarn update` + `git commit` + `git push` in each downstream repo in topological order: `nearbytes-crypto → log → sync → skeleton → files → benchmarks`.
+In this repo, `yarn update` is for maintainers syncing pinned Nearbytes internal deps to newer commits. Regular users should use `yarn install`.
 
 ## CLI (`nbf`)
 

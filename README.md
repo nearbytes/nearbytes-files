@@ -48,6 +48,34 @@ friend add <their-profile-public-key-hex>
 friends
 ```
 
+### WebDAV (Quickstart)
+
+WebDAV is built in. Start the REPL, then connect your OS/WebDAV client to:
+
+```text
+https://127.0.0.1:9843/
+```
+
+Important:
+
+- You must have an active profile first (`profile use <name>`).
+- You must have at least one registered volume (`volume add ...`, `volume use ...`).
+- The mount root shows your registered volumes as folders (`/myvol`, `/teamdocs`, ...).
+- Credentials for WebDAV auth:
+  - **Username**: your active profile username (the profile name you use in `profile use`).
+  - **Password**: that profile's secret.
+  - If a client autofills a default username, replace it with your profile username.
+
+On macOS Finder:
+
+1. Open **Finder**.
+2. Click **Go → Connect to Server...** (or press `Cmd + K`).
+3. Enter `https://127.0.0.1:9843/` and click **Connect**.
+4. When prompted for credentials:
+   - set **Name** to your profile username (not the default/autofilled username),
+   - set **Password** to your profile secret.
+5. The mounted root will show your registered volumes as folders.
+
 ## Setup
 
 For normal usage, setup is just:

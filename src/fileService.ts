@@ -9,14 +9,17 @@ import { serializeEvent, serializeEventEnvelope, serializeInnerEventPayloadJson 
 import type { EventLogEntry } from 'nearbytes-log';
 import { openChannel, loadEventLog, verifyEventLog } from 'nearbytes-log';
 import { eventEnvelopePublicKeyMatches, hydrateSignedEvent } from 'nearbytes-log';
-import type { DirectoryMetadata, FileMetadata } from './fileEvents.js';
 import {
+  CHAT_MESSAGE_PROTOCOL,
+  IDENTITY_RECORD_PROTOCOL,
+  IDENTITY_SNAPSHOT_PROTOCOL,
   parseChatMessageJson,
   parseIdentityRecordJson,
   parseIdentitySnapshotJson,
   type ChatMessage,
   type IdentityRecord,
-} from './chatCodec.js';
+} from 'nearbytes-chat';
+import type { DirectoryMetadata, FileMetadata } from './fileEvents.js';
 import {
   createRecipientKeyCapsule,
   decryptFileForVolume,
@@ -1323,7 +1326,7 @@ function buildTimelineRows(entries: EventLogEntry[], alreadyOrdered = false): St
     ) {
       const inferredTimestamp = payload.publishedAt ?? sequence;
 
-      if (payload.protocol === 'nb.identity.record.v1') {
+      if (payload.protocol === IDENTITY_RECORD_PROTOCOL) {
         const identityRecord = parseIdentityRecordJson(payload.record);
         const displayName = identityRecord?.profile.displayName;
         rows.push({
@@ -1343,7 +1346,7 @@ function buildTimelineRows(entries: EventLogEntry[], alreadyOrdered = false): St
         continue;
       }
 
-      if (payload.protocol === 'nb.identity.snapshot.v1') {
+      if (payload.protocol === IDENTITY_SNAPSHOT_PROTOCOL) {
         const snapshot = parseIdentitySnapshotJson(payload.record);
         const identityRecord = snapshot?.record;
         const displayName = identityRecord?.profile.displayName;
@@ -1364,7 +1367,7 @@ function buildTimelineRows(entries: EventLogEntry[], alreadyOrdered = false): St
         continue;
       }
 
-      if (payload.protocol === 'nb.chat.message.v1') {
+      if (payload.protocol === CHAT_MESSAGE_PROTOCOL) {
         const chatMessage = parseChatMessageJson(payload.record);
         const body = timelineSnippet(chatMessage?.body);
         rows.push({

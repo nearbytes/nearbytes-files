@@ -39,7 +39,7 @@ export type {
   IdentitySnapshot,
   ChatMessage,
   IdentityProfile,
-} from './chatCodec.js';
+} from 'nearbytes-chat';
 export type { EncryptedFileWrite, RecipientKeyCapsuleBytes } from './fileCrypto.js';
 
 // Functions
@@ -70,6 +70,13 @@ export {
 export { reconstructFileState } from './fileState.js';
 export { isFileEvent, encodeFileEvent, decodeFileEvent } from './fileEventCodec.js';
 export { dedupeOrderedFilenames, resolveImportedFilename } from './fileCommands.js';
+export type { FileReplayContext, LoadFileReplayContextOptions } from './fileEmit.js';
+export {
+  findEventIndex,
+  formatTimelineGotoIndexError,
+  loadFileReplayContext,
+  replayContextThrough,
+} from './fileEmit.js';
 export type { Channel } from 'nearbytes-log';
 export { openChannel, loadEventLog, verifyEventLog } from 'nearbytes-log';
 export type { Volume, VolumeFileMetadata, VolumeFileSystemState } from './volume.js';
@@ -89,21 +96,3 @@ export {
   setupChannel,
 } from './operations.js';
 export { normalizeVolumePath, basename, dirname } from './pathUtils.js';
-export {
-  createIdentityRecord,
-  verifyIdentityRecord,
-  createChatMessage,
-  verifyChatMessage,
-  createIdentitySnapshot,
-  verifyIdentitySnapshot,
-  parseChatMessageJson,
-  parseIdentityRecordJson,
-  parseIdentitySnapshotJson,
-  parseChatMessage,
-  parseIdentityRecord,
-  parseIdentitySnapshot,
-  serializeIdentityRecord,
-  serializeChatMessage,
-  serializeIdentitySnapshot,
-  publicKeyFromHex,
-} from './chatCodec.js';

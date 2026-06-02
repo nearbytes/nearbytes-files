@@ -18,10 +18,11 @@ import type { AppRecordPayload } from 'nearbytes-crypto';
 import { createSignedEvent } from 'nearbytes-log';
 import type { ProfileConfig } from 'nearbytes-skeleton';
 import {
+  IDENTITY_RECORD_PROTOCOL,
   createIdentityRecord,
   serializeIdentityRecord,
   verifyIdentityRecord,
-} from '../chatCodec.js';
+} from 'nearbytes-chat';
 import { green, dim, bold, cyan, yellow } from './output.js';
 import type { Context } from './context.js';
 import { persistConfig } from './configStore.js';
@@ -185,7 +186,7 @@ export async function cmdProfilePublish(
   const recordJson = serializeIdentityRecord(record);
   const payload: AppRecordPayload = {
     type: EventType.APP_RECORD,
-    protocol: 'nb.identity.record.v1',
+    protocol: IDENTITY_RECORD_PROTOCOL,
     authorPublicKey: publicKey,
     record: recordJson,
     publishedAt: Date.now(),

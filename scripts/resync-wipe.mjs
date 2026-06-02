@@ -11,7 +11,8 @@
  * Wipes:
  *   channels/               — stored events
  *   blocks/                 — stored blocks
- *   sync/fetch-cursors.json — remote cursor positions (resume from seq 0)
+ *   sync/fetch-cursors/     — per-remote cursor files (resume from seq 0)
+ *   sync/fetch-cursors.json — legacy aggregate cursor file (if present)
  *
  * Usage:
  *   node scripts/resync-wipe.mjs [--data-dir /path/to/dataDir] [--dry-run]
@@ -40,6 +41,7 @@ if (!dataDir) {
 const targets = [
   { path: join(dataDir, 'channels'), label: 'channels/' },
   { path: join(dataDir, 'blocks'), label: 'blocks/' },
+  { path: join(dataDir, 'sync', 'fetch-cursors'), label: 'sync/fetch-cursors/' },
   { path: join(dataDir, 'sync', 'fetch-cursors.json'), label: 'sync/fetch-cursors.json' },
 ];
 

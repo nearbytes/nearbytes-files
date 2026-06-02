@@ -8,6 +8,7 @@ import { type Log } from 'nearbytes-log';
 import { serializeEvent, serializeEventEnvelope, serializeInnerEventPayloadJson } from 'nearbytes-log';
 import type { EventLogEntry } from 'nearbytes-log';
 import { openChannel, loadEventLog, verifyEventLog } from 'nearbytes-log';
+import { eventEnvelopePublicKeyMatches, hydrateSignedEvent } from 'nearbytes-log';
 import type { DirectoryMetadata, FileMetadata } from './fileEvents.js';
 import {
   parseChatMessageJson,
@@ -232,6 +233,16 @@ export interface FileService {
     secret: string,
     opts?: { readonly enrichSizes?: boolean; readonly throughEventHash?: string },
   ): Promise<import('./fileEmit.js').FileReplayContext>;
+  /**
+   * Fast-path: append one already-stored inbound event into the in-memory replay
+   * cache without rescanning channel event hashes from disk.
+   * Returns the updated replay context when cache was extended, otherwise `undefined`
+   * so caller can fall back to normal disk replay refresh.
+   */
+  applyInboundEvent(
+    secret: string,
+    eventHash: string,
+  ): Promise<import('./fileEmit.js').FileReplayContext | undefined>;
   /** Drop in-memory replay; next read reloads from storage (e.g. after external sync). */
   markReplayStale(secret: string): void;
 
@@ -360,6 +371,33 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
     });
   };
 
+  const applyInboundEvent = async (
+    secret: string,
+    eventHash: string,
+  ): Promise<import('./fileEmit.js').FileReplayContext | undefined> => {
+    const normalizedSecret = normalizeSecret(secret) as unknown as string;
+    const state = replayCache.get(normalizedSecret);
+    if (state?.context === undefined) {
+      return undefined;
+    }
+    const keyPair = await dependencies.crypto.deriveKeys(createSecret(normalizedSecret));
+    let signedEvent;
+    try {
+      signedEvent = await channelStorage.events.retrieveEvent(keyPair.publicKey, eventHash as Hash);
+    } catch {
+      return undefined;
+    }
+    if (!eventEnvelopePublicKeyMatches(signedEvent, keyPair.publicKey)) {
+      return undefined;
+    }
+    const hydrated = await hydrateSignedEvent(dependencies.crypto, keyPair.privateKey, signedEvent);
+    const next = extendFileReplayContext(state.context, [
+      { eventHash: eventHash as Hash, signedEvent: hydrated },
+    ]);
+    replayCache.set(normalizedSecret, { context: next, stale: false });
+    return next;
+  };
+
   return {
     addFile: async (secret, path, data, opts) =>
       addFileWithDeps(
@@ -431,6 +469,7 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
       );
     },
     getReplayContext: async (secret, opts) => getReplayContext(secret, opts),
+    applyInboundEvent: async (secret, eventHash) => applyInboundEvent(secret, eventHash),
     markReplayStale: (secret) => markReplayStale(secret),
     computeSnapshot: async (secret) =>
       computeSnapshotWithDeps(secret, now, getReplayContext),

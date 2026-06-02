@@ -248,7 +248,7 @@ async function maybeRefreshAfterInboundEvent(
   if (!(await inboundEventReadyToMaterialize(ctx, channelHex, eventHash))) {
     return;
   }
-  await refreshVolumesForChannel(ctx, channelHex);
+  await refreshVolumesForChannel(ctx, channelHex, eventHash);
 }
 
 async function inboundEventReadyToMaterialize(
@@ -301,7 +301,11 @@ async function inboundEventReadyToMaterialize(
   }
 }
 
-async function refreshVolumesForChannel(ctx: Context, channelHex: string): Promise<void> {
+async function refreshVolumesForChannel(
+  ctx: Context,
+  channelHex: string,
+  eventHash: string,
+): Promise<void> {
   for (const secret of ctx.volumeRegistry.values()) {
     const keyPair = await ctx.skeleton.crypto.deriveKeys(createSecret(secret));
     if (bytesToHex(keyPair.publicKey).toLowerCase() !== channelHex) {
@@ -313,6 +317,12 @@ async function refreshVolumesForChannel(ctx: Context, channelHex: string): Promi
     }
     if (debugEnabled('sync')) {
       debugLog('sync', 'files', `reload open volume channel=${channelHex.slice(0, 8)}…`);
+    }
+    const replay = await ctx.fileService.applyInboundEvent(secret, eventHash);
+    if (replay !== undefined) {
+      ctx.lastTimelineEvents = null;
+      ctx.volumes.get(keyHex)!.applyMaterialized(replay.fs);
+      continue;
     }
     await reloadVolumeFromDisk(ctx, secret);
   }

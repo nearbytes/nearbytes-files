@@ -4,7 +4,7 @@
  */
 
 import http from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
 import type { FileService } from '../fileService.js';
@@ -235,7 +235,8 @@ async function loadSyncSummary(dataDir: string): Promise<{
   fetchCursors: unknown;
 }> {
   const receptionPath = join(dataDir, 'sync', 'reception.jsonl');
-  const cursorPath = join(dataDir, 'sync', 'fetch-cursors.json');
+  const cursorDirPath = join(dataDir, 'sync', 'fetch-cursors');
+  const legacyCursorPath = join(dataDir, 'sync', 'fetch-cursors.json');
   let receptionLines = 0;
   let receptionTail: unknown[] = [];
   try {
@@ -248,9 +249,25 @@ async function loadSyncSummary(dataDir: string): Promise<{
   }
   let fetchCursors: unknown = null;
   try {
-    fetchCursors = JSON.parse(await readFile(cursorPath, 'utf8')) as unknown;
+    const files = await readdir(cursorDirPath);
+    const cursors: Record<string, unknown> = {};
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+      try {
+        const raw = await readFile(join(cursorDirPath, file), 'utf8');
+        const parsed = JSON.parse(raw) as unknown;
+        cursors[file] = parsed;
+      } catch {
+        // ignore malformed cursor files in debug endpoint
+      }
+    }
+    fetchCursors = { version: 1, perPeerFiles: cursors };
   } catch {
-    fetchCursors = null;
+    try {
+      fetchCursors = JSON.parse(await readFile(legacyCursorPath, 'utf8')) as unknown;
+    } catch {
+      fetchCursors = null;
+    }
   }
   return { receptionLines, receptionTail, fetchCursors };
 }

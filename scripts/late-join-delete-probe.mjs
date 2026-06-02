@@ -86,10 +86,18 @@ async function profileKeys(ctx) {
 
 async function readFetchCursor(dataDir, profile, inst) {
   try {
-    const raw = await readFile(join(dataDir, 'sync', 'fetch-cursors.json'), 'utf8');
+    const raw = await readFile(
+      join(dataDir, 'sync', 'fetch-cursors', `${inst.toLowerCase()}.json`),
+      'utf8',
+    );
     const file = JSON.parse(raw);
-    const k = `${profile}|${inst}`;
-    return file.cursors?.[k]?.cursor ?? null;
+    if (
+      String(file.remoteInstancePublicKey ?? '').toLowerCase() !== inst.toLowerCase() ||
+      String(file.remoteProfilePublicKey ?? '').toLowerCase() !== profile.toLowerCase()
+    ) {
+      return null;
+    }
+    return typeof file.cursor === 'string' ? file.cursor : null;
   } catch {
     return null;
   }

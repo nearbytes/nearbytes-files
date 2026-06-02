@@ -2,6 +2,17 @@
 
 Encrypted file volumes on a cryptographic event log — library (`FileService`) and CLI (`nbf`).
 
+## Quickstart (Simplest)
+
+From this repository root:
+
+```sh
+yarn install
+yarn repl
+```
+
+That is the minimal local run path.
+
 ## Setup
 
 Internal deps (`nearbytes-crypto`, `nearbytes-log`, `nearbytes-skeleton`, …) are pinned in `package.json` as `github:nearbytes/<pkg>#<commit-sha>` and resolved by `yarn install` — there is no sibling-checkout requirement. Yarn 4.15 (Corepack-managed via the `packageManager` field) fetches each pinned commit, runs its `prepack: tsc`, and caches the resulting tarball in `yarn.lock`.

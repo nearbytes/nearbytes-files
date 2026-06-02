@@ -91,20 +91,16 @@ try {
   await sleep(1500);
 
   await mkdir(join(remoteDir, 'sync'), { recursive: true });
-  const cursorKey = `${localProfile}|${localInst}`;
+  await mkdir(join(remoteDir, 'sync', 'fetch-cursors'), { recursive: true });
   await writeFile(
-    join(remoteDir, 'sync', 'fetch-cursors.json'),
+    join(remoteDir, 'sync', 'fetch-cursors', `${localInst.toLowerCase()}.json`),
     `${JSON.stringify(
       {
         version: 1,
-        cursors: {
-          [cursorKey]: {
-            remoteProfilePublicKey: localProfile,
-            remoteInstancePublicKey: localInst,
-            cursor: '99999',
-            updatedAt: new Date().toISOString(),
-          },
-        },
+        remoteProfilePublicKey: localProfile.toLowerCase(),
+        remoteInstancePublicKey: localInst.toLowerCase(),
+        cursor: '99999',
+        updatedAt: new Date().toISOString(),
       },
       null,
       2,

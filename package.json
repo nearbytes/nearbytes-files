@@ -56,6 +56,8 @@
     "probe:event-propagation": "yarn build && node scripts/event-propagation-run.mjs",
     "probe:cold-restart-propagation": "yarn build && node scripts/cold-restart-propagation-probe.mjs",
     "probe:cold-restart": "yarn build && node scripts/cold-restart-propagation-run.mjs",
+    "resync-wipe": "node scripts/resync-wipe.mjs",
+    "resync-wipe:dry": "node scripts/resync-wipe.mjs --dry-run",
     "update": "node scripts/update.mjs"
   },
   "license": "MIT",

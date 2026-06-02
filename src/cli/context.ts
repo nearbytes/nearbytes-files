@@ -183,7 +183,7 @@ export async function openAndWatch(
 
   if (watch && !ctx.watchers.has(keyHex)) {
     const channelDir = join(ctx.config.dataDir, defaultPathMapper(keyPair.publicKey));
-    const watcher = createFilesystemWatcher(channelDir, {
+    const watcher = await createFilesystemWatcher(channelDir, {
       refresh: async () => {
         await reloadVolumeFromDisk(ctx, secret);
       },

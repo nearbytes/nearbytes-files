@@ -23,7 +23,7 @@ import {
   attachSyncInboundRefresh,
   openAndWatch,
   reloadVolumeFromDisk,
-} from '../dist/cli/context.js';
+} from '../dist/probeRuntime.js';
 import { applyDebugOption } from '../dist/debug.js';
 
 if (process.env.NEARBYTES_DEBUG) {

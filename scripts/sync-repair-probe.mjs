@@ -3,7 +3,7 @@
  * Used to verify parent-event repair after deploying nearbytes-sync fixes.
  */
 import { readConfig } from 'nearbytes-skeleton';
-import { createContext, openAndWatch, reloadVolumeFromDisk } from '../dist/cli/context.js';
+import { createContext, openAndWatch, reloadVolumeFromDisk } from '../dist/probeRuntime.js';
 
 const SECRET = 'test:test';
 const PEER_WAIT_MS = 90_000;

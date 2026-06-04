@@ -18,7 +18,7 @@ import {
   attachSyncInboundRefresh,
   openAndWatch,
   reloadVolumeFromDisk,
-} from '../dist/cli/context.js';
+} from '../dist/probeRuntime.js';
 
 process.env.NEARBYTES_SYNC_DISCOVERY = process.env.NEARBYTES_SYNC_DISCOVERY ?? 'mdns';
 

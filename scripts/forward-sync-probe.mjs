@@ -2,7 +2,7 @@
  * One-shot: boot sync, open volume, wait for a named file to appear via peer sync.
  */
 import { readConfig } from 'nearbytes-skeleton';
-import { createContext, openAndWatch, reloadVolumeFromDisk } from '../dist/cli/context.js';
+import { createContext, openAndWatch, reloadVolumeFromDisk } from '../dist/probeRuntime.js';
 
 const SECRET = process.env.NBF_VOLUME_SECRET ?? 'test:test';
 const TARGET = process.env.NBF_TARGET_FILE ?? 'e2e-forward.txt';

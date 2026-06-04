@@ -21,16 +21,21 @@ yarn type-check
 
 Needs Node 18+ and Git.
 
-This package is not published to npm. Other Nearbytes repos consume it with a
-pinned GitHub dependency:
+This package is not published to npm. Other Nearbytes repos consume it as an
+unpinned GitHub dependency (resolved to latest `main` via `yarn refresh` in
+consumer repos):
 
 ```json
 {
   "dependencies": {
-    "nearbytes-files": "github:nearbytes/nearbytes-files#<commit-sha>"
+    "nearbytes-files": "github:nearbytes/nearbytes-files"
   }
 }
 ```
+
+Integration probes and benchmarks may import `nearbytes-files/probe-runtime`
+(`createProbeRuntime`, `openAndWatch`, sync refresh helpers). The deprecated
+`nearbytes-files/cli/context` export aliases the same module.
 
 ## What This Package Owns
 

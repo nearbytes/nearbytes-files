@@ -1,13 +1,10 @@
 {
   "name": "nearbytes-files",
   "version": "0.1.0",
-  "description": "Nearbytes file protocol — encrypted file storage on top of the event log, with reactive volume and CLI",
+  "description": "Nearbytes file protocol — encrypted file storage on top of the event log, with reactive volume",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "bin": {
-    "nbf": "dist/cli/index.js"
-  },
   "files": [
     "dist"
   ],
@@ -24,13 +21,13 @@
       "import": "./dist/service.js",
       "types": "./dist/service.d.ts"
     },
-    "./cli/context": {
-      "import": "./dist/cli/context.js",
-      "types": "./dist/cli/context.d.ts"
+    "./probe-runtime": {
+      "import": "./dist/probeRuntime.js",
+      "types": "./dist/probeRuntime.d.ts"
     },
-    "./webdav": {
-      "import": "./dist/webdav/index.js",
-      "types": "./dist/webdav/index.d.ts"
+    "./cli/context": {
+      "import": "./dist/probeRuntime.js",
+      "types": "./dist/probeRuntime.d.ts"
     }
   },
   "scripts": {
@@ -38,10 +35,9 @@
     "build": "tsc",
     "type-check": "tsc --noEmit",
     "refresh": "node scripts/refresh.mjs",
-    "nbf": "tsc && node dist/cli/index.js",
-    "repl": "tsc && node dist/cli/index.js",
-    "dev": "node scripts/refresh.mjs && yarn repl --dev-inspect",
-    "dev:fast": "yarn repl --dev-inspect",
+    "update": "node scripts/update.mjs",
+    "dev": "node scripts/dev-bootstrap.mjs && tsc --watch --preserveWatchOutput",
+    "dev:fast": "tsc --watch --preserveWatchOutput",
     "probe:sync-matrix": "yarn build && node scripts/sync-matrix-probe.mjs",
     "probe:offline-reopen": "yarn build && node scripts/offline-reopen-probe.mjs",
     "probe:false-cursor": "yarn build && node scripts/false-cursor-probe.mjs",
@@ -51,24 +47,20 @@
     "probe:cold-restart-propagation": "yarn build && node scripts/cold-restart-propagation-probe.mjs",
     "probe:cold-restart": "yarn build && node scripts/cold-restart-propagation-run.mjs",
     "resync-wipe": "node scripts/resync-wipe.mjs",
-    "resync-wipe:dry": "node scripts/resync-wipe.mjs --dry-run",
-    "update": "node scripts/update.mjs"
+    "resync-wipe:dry": "node scripts/resync-wipe.mjs --dry-run"
   },
   "license": "MIT",
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "commander": "^12.0.0",
     "nearbytes-chat": "github:nearbytes/nearbytes-chat",
     "nearbytes-crypto": "github:nearbytes/nearbytes-crypto",
     "nearbytes-log": "github:nearbytes/nearbytes-log",
-    "nearbytes-skeleton": "github:nearbytes/nearbytes-skeleton",
-    "selfsigned": "^5.5.0"
+    "nearbytes-skeleton": "github:nearbytes/nearbytes-skeleton"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
-    "@types/selfsigned": "^2.1.0",
     "typescript": "^5.3.2"
   },
   "packageManager": "yarn@4.15.0"

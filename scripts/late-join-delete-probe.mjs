@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bytesToHex, createSecret } from 'nearbytes-crypto';
 import { initializeStorageRoot } from 'nearbytes-skeleton';
-import { createContext, attachSyncInboundRefresh, reloadVolumeFromDisk } from '../dist/cli/context.js';
+import { createContext, attachSyncInboundRefresh, reloadVolumeFromDisk } from '../dist/probeRuntime.js';
 
 process.env.NEARBYTES_SYNC_DISCOVERY = process.env.NEARBYTES_SYNC_DISCOVERY ?? 'mdns';
 

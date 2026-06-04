@@ -7,7 +7,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bytesToHex, createSecret } from 'nearbytes-crypto';
 import { initializeStorageRoot } from 'nearbytes-skeleton';
-import { createContext, attachSyncInboundRefresh, reloadVolumeFromDisk } from '../dist/probeRuntime.js';
+import {
+  createEngineRuntime,
+  openAndWatch,
+  reloadVolumeFromDisk,
+  attachSyncInboundRefresh,
+} from '../../nearbytes-engine/dist/index.js';
 
 process.env.NEARBYTES_SYNC_DISCOVERY = process.env.NEARBYTES_SYNC_DISCOVERY ?? 'mdns';
 
@@ -32,27 +37,27 @@ function config(dataDir) {
 
 async function makeContext(dataDir, label) {
   await initializeStorageRoot(dataDir);
-  const ctx = await createContext(config(dataDir));
-  attachSyncInboundRefresh(ctx);
-  ctx.volumeRegistry.set('test', VOLUME_SECRET);
-  const inst = ctx.skeleton.sync.instancePublicKey.slice(0, 8);
+  const rt = await createEngineRuntime(config(dataDir));
+  attachSyncInboundRefresh(rt);
+  
+  const inst = rt.skeleton.sync.instancePublicKey.slice(0, 8);
   console.error(`${label}: inst=${inst}`);
-  return ctx;
+  return rt;
 }
 
-async function listNames(ctx) {
-  await reloadVolumeFromDisk(ctx, VOLUME_SECRET);
-  return (await ctx.fileService.listFiles(VOLUME_SECRET)).map((f) => f.path).sort();
+async function listNames(rt) {
+  await reloadVolumeFromDisk(rt, VOLUME_SECRET);
+  return (await rt.fileService.listFiles(VOLUME_SECRET)).map((f) => f.path).sort();
 }
 
 async function sleep(ms) {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-async function waitForPeer(ctx, label) {
+async function waitForPeer(rt, label) {
   const deadline = Date.now() + PEER_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    if (ctx.skeleton.sync.snapshot().connectedPeers > 0) {
+    if (rt.skeleton.sync.snapshot().connectedPeers > 0) {
       return Date.now();
     }
     await sleep(POLL_MS);
@@ -60,11 +65,11 @@ async function waitForPeer(ctx, label) {
   throw new Error(`${label}: no peer within ${PEER_TIMEOUT_MS}ms`);
 }
 
-async function waitUntilGone(ctx, path, label, sinceMs = Date.now()) {
+async function waitUntilGone(rt, path, label, sinceMs = Date.now()) {
   const deadline = sinceMs + SYNC_BUDGET_MS;
   let last = [];
   while (Date.now() < deadline) {
-    last = await listNames(ctx);
+    last = await listNames(rt);
     if (!last.includes(path)) {
       const ms = Date.now() - sinceMs;
       console.error(`${label}: delete visible in ${ms}ms [${last.join(',')}]`);
@@ -77,11 +82,11 @@ async function waitUntilGone(ctx, path, label, sinceMs = Date.now()) {
   );
 }
 
-async function profileKeys(ctx) {
+async function profileKeys(rt) {
   const pk = bytesToHex(
-    (await ctx.skeleton.crypto.deriveKeys(createSecret(PROFILE_SECRET))).publicKey,
+    (await rt.skeleton.crypto.deriveKeys(createSecret(PROFILE_SECRET))).publicKey,
   );
-  return { profile: pk.toLowerCase(), inst: ctx.skeleton.sync.instancePublicKey.toLowerCase() };
+  return { profile: pk.toLowerCase(), inst: rt.skeleton.sync.instancePublicKey.toLowerCase() };
 }
 
 async function readFetchCursor(dataDir, profile, inst) {

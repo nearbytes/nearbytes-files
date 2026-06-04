@@ -18,13 +18,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { bytesToHex, createSecret, createCryptoOperations } from 'nearbytes-crypto';
 import { initializeStorageRoot } from 'nearbytes-skeleton';
+import { applyDebugOption } from '../dist/debug.js';
 import {
-  createContext,
-  attachSyncInboundRefresh,
+  createEngineRuntime,
   openAndWatch,
   reloadVolumeFromDisk,
-} from '../dist/probeRuntime.js';
-import { applyDebugOption } from '../dist/debug.js';
+  attachSyncInboundRefresh,
+} from '../../nearbytes-engine/dist/index.js';
 
 if (process.env.NEARBYTES_DEBUG) {
   applyDebugOption(process.env.NEARBYTES_DEBUG);
@@ -89,24 +89,24 @@ function diag(line) {
   process.stderr.write(`[${ROLE}] ${line}\n`);
 }
 
-async function volumeChannelHex(ctx) {
-  const kp = await ctx.skeleton.crypto.deriveKeys(createSecret(VOLUME_SECRET));
+async function volumeChannelHex(rt) {
+  const kp = await rt.skeleton.crypto.deriveKeys(createSecret(VOLUME_SECRET));
   return bytesToHex(kp.publicKey).toLowerCase();
 }
 
-async function listNames(ctx) {
-  await reloadVolumeFromDisk(ctx, VOLUME_SECRET);
-  return (await ctx.fileService.listFiles(VOLUME_SECRET)).map((f) => f.path).sort();
+async function listNames(rt) {
+  await reloadVolumeFromDisk(rt, VOLUME_SECRET);
+  return (await rt.fileService.listFiles(VOLUME_SECRET)).map((f) => f.path).sort();
 }
 
 async function sleep(ms) {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-async function waitForPeer(ctx) {
+async function waitForPeer(rt) {
   const deadline = Date.now() + PEER_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    if (ctx.skeleton.sync.snapshot().connectedPeers > 0) {
+    if (rt.skeleton.sync.snapshot().connectedPeers > 0) {
       return Date.now();
     }
     await sleep(POLL_MS);
@@ -137,23 +137,23 @@ async function makeContext(dataDir) {
   if (!existsSync(dataDir)) {
     await initializeStorageRoot(dataDir);
   }
-  const ctx = await createContext(await buildConfig(dataDir));
+  const rt = await createEngineRuntime(await buildConfig(dataDir));
   diag(`mode=${MODE}`);
   if (ROLE === 'joiner') {
-    attachSyncInboundRefresh(ctx);
+    attachSyncInboundRefresh(rt);
   }
-  ctx.volumeRegistry.set('test', VOLUME_SECRET);
-  const inst = ctx.skeleton.sync.instancePublicKey.slice(0, 8);
+  
+  const inst = rt.skeleton.sync.instancePublicKey.slice(0, 8);
   diag(`inst=${inst} dataDir=${dataDir}`);
-  return ctx;
+  return rt;
 }
 
-async function runJoiner(ctx) {
-  const channel = await volumeChannelHex(ctx);
+async function runJoiner(rt) {
+  const channel = await volumeChannelHex(rt);
   // Channel dir may not exist yet on a cold joiner; watcher needs the path (REPL opens volume first).
-  await openAndWatch(ctx, VOLUME_SECRET, false);
+  await openAndWatch(rt, VOLUME_SECRET, false);
 
-  const peerAt = await waitForPeer(ctx);
+  const peerAt = await waitForPeer(rt);
   const startedAt = Number(process.env.NBF_PROP_STARTED_AT ?? peerAt);
   const contextReadyAt = Number(process.env.NBF_PROP_CONTEXT_READY_AT ?? startedAt);
   out({
@@ -174,7 +174,7 @@ async function runJoiner(ctx) {
   const t0 = await waitForGo();
   diag(`go t0=${t0} target=${TARGET}`);
 
-  const unsub = ctx.skeleton.sync.onEvent((event) => {
+  const unsub = rt.skeleton.sync.onEvent((event) => {
     const now = Date.now();
     if (now < t0) return;
     if (event.kind === 'block-received' && blockAt === null) {
@@ -194,7 +194,7 @@ async function runJoiner(ctx) {
   let polls = 0;
   while (Date.now() < deadline) {
     polls += 1;
-    const names = await listNames(ctx);
+    const names = await listNames(rt);
     if (names.includes(TARGET)) {
       listAt = Date.now();
       break;
@@ -203,7 +203,7 @@ async function runJoiner(ctx) {
   }
   unsub();
 
-  const names = listAt === null ? await listNames(ctx) : null;
+  const names = listAt === null ? await listNames(rt) : null;
   const timedOut = listAt === null;
   const result = {
     phase: timedOut ? 'timeout' : 'measured',
@@ -236,9 +236,9 @@ async function runJoiner(ctx) {
   return result;
 }
 
-async function runHolder(ctx) {
-  ctx.volumeRegistry.set('test', VOLUME_SECRET);
-  const peerAt = await waitForPeer(ctx);
+async function runHolder(rt) {
+  
+  const peerAt = await waitForPeer(rt);
   const startedAt = Number(process.env.NBF_PROP_STARTED_AT ?? peerAt);
   const contextReadyAt = Number(process.env.NBF_PROP_CONTEXT_READY_AT ?? startedAt);
   out({
@@ -255,7 +255,7 @@ async function runHolder(ctx) {
 
   const t0 = await waitForGo();
   const publishedAt = Date.now();
-  await ctx.fileService.addFile(VOLUME_SECRET, TARGET, Buffer.from(`prop ${publishedAt}\n`));
+  await rt.fileService.addFile(VOLUME_SECRET, TARGET, Buffer.from(`prop ${publishedAt}\n`));
   out({
     phase: 'published',
     role: ROLE,
@@ -278,22 +278,22 @@ await mkdir(dataDir, { recursive: true });
 const startedAt = Date.now();
 process.env.NBF_PROP_STARTED_AT = String(startedAt);
 
-let ctx;
+let rt;
 try {
   if (existsSync(dataDir) && process.env.NBF_PROP_KEEP !== '1') {
     await rm(dataDir, { recursive: true, force: true });
     await mkdir(dataDir, { recursive: true });
   }
-  ctx = await makeContext(dataDir);
+  rt = await makeContext(dataDir);
   const contextReadyAt = Date.now();
   process.env.NBF_PROP_CONTEXT_READY_AT = String(contextReadyAt);
   if (ROLE === 'joiner') {
-    await runJoiner(ctx);
+    await runJoiner(rt);
   } else {
-    await runHolder(ctx);
+    await runHolder(rt);
   }
 } finally {
-  if (ctx) await ctx.destroy().catch(() => {});
+  if (rt) await rt.destroy().catch(() => {});
   if (process.env.NBF_PROP_KEEP !== '1' && process.env.NBF_PROP_BASE === undefined) {
     await rm(base, { recursive: true, force: true }).catch(() => {});
   }

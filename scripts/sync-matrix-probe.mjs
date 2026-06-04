@@ -10,7 +10,12 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createContext, reloadVolumeFromDisk } from '../dist/probeRuntime.js';
+import {
+  createEngineRuntime,
+  openAndWatch,
+  reloadVolumeFromDisk,
+  attachSyncInboundRefresh,
+} from '../../nearbytes-engine/dist/index.js';
 
 process.env.NEARBYTES_SYNC_DISCOVERY = process.env.NEARBYTES_SYNC_DISCOVERY ?? 'mdns';
 
@@ -32,28 +37,28 @@ function config(dataDir) {
 }
 
 async function makeContext(dataDir, label) {
-  const ctx = await createContext(config(dataDir));
-  ctx.volumeRegistry.set('test', VOLUME_SECRET);
+  const rt = await createEngineRuntime(config(dataDir));
+  
   console.error(
-    `${label}: peer=${ctx.skeleton.sync.peerId.slice(0, 8)} ` +
-      `inst=${ctx.skeleton.sync.instancePublicKey.slice(0, 8)}`,
+    `${label}: peer=${rt.skeleton.sync.peerId.slice(0, 8)} ` +
+      `inst=${rt.skeleton.sync.instancePublicKey.slice(0, 8)}`,
   );
-  return ctx;
+  return rt;
 }
 
-async function listNames(ctx) {
-  await reloadVolumeFromDisk(ctx, VOLUME_SECRET);
-  return (await ctx.fileService.listFiles(VOLUME_SECRET)).map((f) => f.path).sort();
+async function listNames(rt) {
+  await reloadVolumeFromDisk(rt, VOLUME_SECRET);
+  return (await rt.fileService.listFiles(VOLUME_SECRET)).map((f) => f.path).sort();
 }
 
 async function sleep(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForPeer(ctx, label) {
+async function waitForPeer(rt, label) {
   const deadline = Date.now() + PEER_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    if (ctx.skeleton.sync.snapshot().connectedPeers > 0) {
+    if (rt.skeleton.sync.snapshot().connectedPeers > 0) {
       console.error(`${label}: peer ok`);
       return;
     }
@@ -62,12 +67,12 @@ async function waitForPeer(ctx, label) {
   throw new Error(`${label}: no peer within ${PEER_TIMEOUT_MS}ms`);
 }
 
-async function waitForFiles(ctx, expected, label) {
+async function waitForFiles(rt, expected, label) {
   const want = [...expected].sort().join(',');
   const deadline = Date.now() + SYNC_TIMEOUT_MS;
   let last = [];
   while (Date.now() < deadline) {
-    last = await listNames(ctx);
+    last = await listNames(rt);
     if (last.join(',') === want) {
       console.error(`${label}: ok [${last.join(',')}]`);
       return;
@@ -77,9 +82,9 @@ async function waitForFiles(ctx, expected, label) {
   throw new Error(`${label}: wanted [${want}], last [${last.join(',')}]`);
 }
 
-async function closeContext(ctx) {
-  if (ctx !== null) {
-    await ctx.destroy();
+async function closeContext(rt) {
+  if (rt !== null) {
+    await rt.destroy();
   }
 }
 

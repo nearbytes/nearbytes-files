@@ -14,11 +14,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSecret, bytesToHex } from 'nearbytes-crypto';
 import {
-  createContext,
-  attachSyncInboundRefresh,
+  createEngineRuntime,
   openAndWatch,
   reloadVolumeFromDisk,
-} from '../dist/probeRuntime.js';
+  attachSyncInboundRefresh,
+} from '../../nearbytes-engine/dist/index.js';
 
 process.env.NEARBYTES_SYNC_DISCOVERY = process.env.NEARBYTES_SYNC_DISCOVERY ?? 'mdns';
 
@@ -53,15 +53,15 @@ function config(dataDir) {
 
 async function makeContext(dataDir, label) {
   assertWall(`makeContext ${label}`);
-  const ctx = await createContext(config(dataDir));
-  ctx.volumeRegistry.set('test', VOLUME_SECRET);
-  console.error(`${label}: inst=${ctx.skeleton.sync.instancePublicKey.slice(0, 8)}`);
-  return ctx;
+  const rt = await createEngineRuntime(config(dataDir));
+  
+  console.error(`${label}: inst=${rt.skeleton.sync.instancePublicKey.slice(0, 8)}`);
+  return rt;
 }
 
-async function listNames(ctx) {
-  await reloadVolumeFromDisk(ctx, VOLUME_SECRET);
-  return (await ctx.fileService.listFiles(VOLUME_SECRET)).map((f) => f.path).sort();
+async function listNames(rt) {
+  await reloadVolumeFromDisk(rt, VOLUME_SECRET);
+  return (await rt.fileService.listFiles(VOLUME_SECRET)).map((f) => f.path).sort();
 }
 
 async function sleep(ms) {
@@ -83,12 +83,12 @@ async function waitForPeer(a, b, la, lb) {
   throw new Error(`no peer within ${PEER_TIMEOUT_MS}ms (${la}/${lb})`);
 }
 
-async function waitForFile(ctx, path, label, sinceMs) {
+async function waitForFile(rt, path, label, sinceMs) {
   const deadline = Date.now() + SYNC_TIMEOUT_MS;
   let last = [];
   let eventAt = null;
   let blockAt = null;
-  const unsub = ctx.skeleton.sync.onEvent((ev) => {
+  const unsub = rt.skeleton.sync.onEvent((ev) => {
     const now = Date.now();
     if (ev.kind === 'event-received' && eventAt === null) eventAt = now;
     if (ev.kind === 'block-received' && blockAt === null) blockAt = now;
@@ -96,7 +96,7 @@ async function waitForFile(ctx, path, label, sinceMs) {
   try {
     while (Date.now() < deadline) {
       assertWall(`waitForFile ${label}`);
-      last = await listNames(ctx);
+      last = await listNames(rt);
       if (last.includes(path)) {
         const visibleAt = Date.now();
         return {

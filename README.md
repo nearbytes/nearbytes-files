@@ -33,9 +33,8 @@ consumer repos):
 }
 ```
 
-Integration probes and benchmarks may import `nearbytes-files/probe-runtime`
-(`createProbeRuntime`, `openAndWatch`, sync refresh helpers). The deprecated
-`nearbytes-files/cli/context` export aliases the same module.
+Integration probes and benchmarks use `nearbytes-engine` (`createEngineRuntime`,
+`openAndWatch`, `attachSyncInboundRefresh`) — the same runtime as the CLI and app.
 
 ## What This Package Owns
 

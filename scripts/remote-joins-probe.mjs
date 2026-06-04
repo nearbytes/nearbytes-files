@@ -7,7 +7,12 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createContext, reloadVolumeFromDisk } from '../dist/probeRuntime.js';
+import {
+  createEngineRuntime,
+  openAndWatch,
+  reloadVolumeFromDisk,
+  attachSyncInboundRefresh,
+} from '../../nearbytes-engine/dist/index.js';
 
 process.env.NEARBYTES_SYNC_DISCOVERY = process.env.NEARBYTES_SYNC_DISCOVERY ?? 'mdns';
 
@@ -42,25 +47,25 @@ function config(dataDir) {
 
 async function makeContext(dataDir, label) {
   assertWall(`makeContext ${label}`);
-  const ctx = await createContext(config(dataDir));
-  ctx.volumeRegistry.set('test', VOLUME_SECRET);
-  console.error(`${label}: inst=${ctx.skeleton.sync.instancePublicKey.slice(0, 8)}`);
-  return ctx;
+  const rt = await createEngineRuntime(config(dataDir));
+  
+  console.error(`${label}: inst=${rt.skeleton.sync.instancePublicKey.slice(0, 8)}`);
+  return rt;
 }
 
-async function listNames(ctx) {
-  await reloadVolumeFromDisk(ctx, VOLUME_SECRET);
-  return (await ctx.fileService.listFiles(VOLUME_SECRET)).map((f) => f.path).sort();
+async function listNames(rt) {
+  await reloadVolumeFromDisk(rt, VOLUME_SECRET);
+  return (await rt.fileService.listFiles(VOLUME_SECRET)).map((f) => f.path).sort();
 }
 
 async function sleep(ms) {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-async function destroyCtx(ctx, label) {
-  if (!ctx) return;
+async function destroyCtx(rt, label) {
+  if (!rt) return;
   await Promise.race([
-    ctx.destroy(),
+    rt.destroy(),
     sleep(SHUTDOWN_MS).then(() => {
       console.error(`${label}: destroy timed out after ${SHUTDOWN_MS}ms`);
     }),
@@ -79,13 +84,13 @@ async function waitForPeer(a, b) {
   throw new Error(`no peer within ${PEER_TIMEOUT_MS}ms`);
 }
 
-async function waitForFiles(ctx, expected, label) {
+async function waitForFiles(rt, expected, label) {
   const want = [...expected].sort().join(',');
   const deadline = Date.now() + SYNC_TIMEOUT_MS;
   let last = [];
   while (Date.now() < deadline) {
     assertWall(`waitForFiles ${label}`);
-    last = await listNames(ctx);
+    last = await listNames(rt);
     if (last.join(',') === want) {
       console.error(`${label}: ok [${last.join(',')}]`);
       return;

@@ -312,6 +312,27 @@ interface StoredTimelineRow {
   message?: ChatMessage;
 }
 
+const HYDRATE_CONCURRENCY = 128;
+
+/** Map with bounded concurrency, preserving input order in the result. */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = next++;
+      if (index >= items.length) return;
+      out[index] = await fn(items[index]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return out;
+}
+
 /**
  * Creates a dependency-injected file service for testing or custom storage.
  */
@@ -338,19 +359,26 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
     const listed = await channelStorage.events.listEvents(keyPair.publicKey);
     const unknown = listed.filter((hash) => !projection.has(hash));
     if (unknown.length === 0) return;
-    const entries: import('nearbytes-log').EventLogEntry[] = [];
-    for (const hash of unknown) {
+    // Hydrate with bounded concurrency; trusted replay skips per-event ECDSA
+    // re-verify (events were verified at reception/emit; the content-address
+    // hash is still checked on read).
+    const hydrated = await mapWithConcurrency(unknown, HYDRATE_CONCURRENCY, async (hash) => {
       try {
-        const signedEvent = await channelStorage.events.retrieveEvent(keyPair.publicKey, hash);
-        if (!eventEnvelopePublicKeyMatches(signedEvent, keyPair.publicKey)) continue;
-        entries.push({
+        const signedEvent = await channelStorage.events.retrieveEvent(keyPair.publicKey, hash, {
+          verifySignature: false,
+        });
+        if (!eventEnvelopePublicKeyMatches(signedEvent, keyPair.publicKey)) return undefined;
+        return {
           eventHash: hash,
           signedEvent: await hydrateSignedEvent(crypto, keyPair.privateKey, signedEvent),
-        });
+        } satisfies import('nearbytes-log').EventLogEntry;
       } catch {
-        continue;
+        return undefined;
       }
-    }
+    });
+    const entries = hydrated.filter(
+      (entry): entry is import('nearbytes-log').EventLogEntry => entry !== undefined,
+    );
     if (entries.length > 0) await projection.ingest(entries);
   };
 

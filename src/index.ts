@@ -71,6 +71,9 @@ export { reconstructFileState } from './fileState.js';
 export { isFileEvent, encodeFileEvent, decodeFileEvent } from './fileEventCodec.js';
 export { dedupeOrderedFilenames, resolveImportedFilename } from './fileCommands.js';
 export type { FileReplayContext, LoadFileReplayContextOptions } from './fileEmit.js';
+export { createFilesProjector, FILES_PROJECTOR_ID } from './filesProjector.js';
+export type { FilesKey } from './filesProjector.js';
+export type { FileOrderKey } from './fileLogEntries.js';
 export {
   findEventIndex,
   formatTimelineGotoIndexError,

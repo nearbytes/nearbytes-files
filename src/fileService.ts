@@ -4,7 +4,8 @@ import type { CryptoOperations } from 'nearbytes-crypto';
 import type { EventPayload, Hash, EncryptedData, SerializedEvent, CreateFilePayload } from 'nearbytes-crypto';
 import { EventType, createHash } from 'nearbytes-crypto';
 import { DecryptionError } from 'nearbytes-crypto';
-import { type Log } from 'nearbytes-log';
+import { type Log, type MaterializedStore, type Projection } from 'nearbytes-log';
+import { createProjection, createInMemoryMaterializedStore } from 'nearbytes-log';
 import { serializeEvent, serializeEventEnvelope, serializeInnerEventPayloadJson } from 'nearbytes-log';
 import type { EventLogEntry } from 'nearbytes-log';
 import { openChannel, loadEventLog, verifyEventLog } from 'nearbytes-log';
@@ -49,13 +50,13 @@ import {
 import { observedLogHead, orderEventLogEntries, toCanonicalEntries } from './fileLogEntries.js';
 import {
   emitFileEvent,
-  extendFileReplayContext,
   type CausalLineage,
-  loadFileReplayContext,
   replayContextThrough,
+  enrichLiveFileSizes,
   lineagesForRename,
   lineageAtPath,
 } from './fileEmit.js';
+import { createFilesProjector } from './filesProjector.js';
 import { rememberBlobPlaintextSize } from './fileBlobSizes.js';
 import { normalizeVolumePath } from './pathUtils.js';
 import { runMaterialization } from './materialization.js';
@@ -159,6 +160,12 @@ export interface FileServiceDependencies {
   crypto: CryptoOperations;
   /** Clock override — useful in tests. Defaults to `Date.now`. */
   now?: () => number;
+  /**
+   * Durable materialized-state store for the projection engine. Defaults to an
+   * in-memory store (full re-materialization on restart). Production wiring
+   * (`nearbytes-engine`) passes a `files.sqlite3`-backed store.
+   */
+  store?: MaterializedStore;
 }
 
 /**
@@ -310,80 +317,100 @@ interface StoredTimelineRow {
  */
 export function createFileService(dependencies: FileServiceDependencies): FileService {
   const channelStorage = dependencies.log;
+  const crypto = dependencies.crypto;
   const now = dependencies.now ?? (() => Date.now());
-  type ReplayState = {
-    context?: import('./fileEmit.js').FileReplayContext;
-    pending?: Promise<import('./fileEmit.js').FileReplayContext>;
-    stale: boolean;
+  const store = dependencies.store ?? createInMemoryMaterializedStore();
+  const projector = createFilesProjector();
+
+  type FileProjection = Projection<import('./fileEmit.js').FileReplayContext>;
+  const projections = new Map<string, Promise<FileProjection>>();
+  const dirty = new Set<string>();
+  const norm = (secret: string): string => normalizeSecret(secret) as unknown as string;
+
+  /**
+   * Catch up the projection with channel events not yet in its order index.
+   * Cold (no persisted state) ⇒ full replay; warm ⇒ only the unknown tail.
+   * This is the only place that may read the whole channel, and only on first
+   * access of a channel with no persisted state.
+   */
+  const catchUp = async (projection: FileProjection, secret: string): Promise<void> => {
+    const keyPair = await crypto.deriveKeys(createSecret(secret));
+    const listed = await channelStorage.events.listEvents(keyPair.publicKey);
+    const unknown = listed.filter((hash) => !projection.has(hash));
+    if (unknown.length === 0) return;
+    const entries: import('nearbytes-log').EventLogEntry[] = [];
+    for (const hash of unknown) {
+      try {
+        const signedEvent = await channelStorage.events.retrieveEvent(keyPair.publicKey, hash);
+        if (!eventEnvelopePublicKeyMatches(signedEvent, keyPair.publicKey)) continue;
+        entries.push({
+          eventHash: hash,
+          signedEvent: await hydrateSignedEvent(crypto, keyPair.privateKey, signedEvent),
+        });
+      } catch {
+        continue;
+      }
+    }
+    if (entries.length > 0) await projection.ingest(entries);
   };
-  const replayCache = new Map<string, ReplayState>();
+
+  const ensureProjection = (secret: string): Promise<FileProjection> => {
+    const key = norm(secret);
+    let pending = projections.get(key);
+    if (pending === undefined) {
+      pending = (async () => {
+        const channel = await openChannel(createSecret(secret), crypto);
+        const projection = await createProjection(channelStorage, channel, crypto, projector, store, { now });
+        await catchUp(projection, secret);
+        return projection;
+      })();
+      projections.set(key, pending);
+    }
+    return pending;
+  };
 
   const getReplayContext = async (
     secret: string,
     opts?: { readonly enrichSizes?: boolean; readonly throughEventHash?: string },
   ): Promise<import('./fileEmit.js').FileReplayContext> => {
-    const normalizedSecret = normalizeSecret(secret) as unknown as string;
-    const through = opts?.throughEventHash;
-    const state = replayCache.get(normalizedSecret);
-    if (through !== undefined && state?.context !== undefined && !state.stale) {
-      return replayContextThrough(state.context, through, { enrichSizes: opts?.enrichSizes === true });
+    const projection = await ensureProjection(secret);
+    if (dirty.delete(norm(secret))) await catchUp(projection, secret);
+    let ctx = projection.state();
+    if (opts?.throughEventHash !== undefined) {
+      return replayContextThrough(ctx, opts.throughEventHash, { enrichSizes: opts.enrichSizes === true });
     }
-    if (through === undefined) {
-      if (state !== undefined) {
-        if (state.pending !== undefined) return state.pending;
-        if (!state.stale && state.context !== undefined) return state.context;
-      }
+    if (opts?.enrichSizes === true) {
+      const fs = await enrichLiveFileSizes(
+        ctx.fs,
+        ctx.liveEncryptedKeys,
+        createSecret(secret),
+        crypto,
+        channelStorage,
+      );
+      if (fs !== ctx.fs) ctx = { ...ctx, fs };
     }
-    const seed = through === undefined && state?.stale ? state.context : undefined;
-    const pending = loadFileReplayContext(normalizedSecret, dependencies.crypto, channelStorage, {
-      seed,
-      enrichSizes: opts?.enrichSizes === true,
-      throughEventHash: through,
-    }).then((context) => {
-      if (through === undefined) {
-        replayCache.set(normalizedSecret, { context, stale: false });
-      }
-      return context;
-    });
-    if (through === undefined) {
-      replayCache.set(normalizedSecret, { context: state?.context, pending, stale: true });
-    }
-    return pending;
+    return ctx;
   };
 
+  /** External writes (other process / nbsync) bypass our router; re-scan on next read. */
   const markReplayStale = (secret: string): void => {
-    const normalizedSecret = normalizeSecret(secret) as unknown as string;
-    const state = replayCache.get(normalizedSecret);
-    if (state === undefined) return;
-    replayCache.set(normalizedSecret, { ...state, stale: true });
+    dirty.add(norm(secret));
   };
 
-  const commitReplayEntry = (
+  const commitReplayEntry = async (
     secret: string,
     entry: import('nearbytes-log').EventLogEntry,
-  ): void => {
-    const normalizedSecret = normalizeSecret(secret) as unknown as string;
-    const state = replayCache.get(normalizedSecret);
-    if (state?.context === undefined) {
-      if (state !== undefined) replayCache.set(normalizedSecret, { ...state, stale: true });
-      return;
-    }
-    replayCache.set(normalizedSecret, {
-      context: extendFileReplayContext(state.context, [entry]),
-      stale: false,
-    });
+  ): Promise<void> => {
+    const projection = await ensureProjection(secret);
+    await projection.ingest([entry]);
   };
 
   const applyInboundEvent = async (
     secret: string,
     eventHash: string,
   ): Promise<import('./fileEmit.js').FileReplayContext | undefined> => {
-    const normalizedSecret = normalizeSecret(secret) as unknown as string;
-    const state = replayCache.get(normalizedSecret);
-    if (state?.context === undefined) {
-      return undefined;
-    }
-    const keyPair = await dependencies.crypto.deriveKeys(createSecret(normalizedSecret));
+    const projection = await ensureProjection(secret);
+    const keyPair = await crypto.deriveKeys(createSecret(secret));
     let signedEvent;
     try {
       signedEvent = await channelStorage.events.retrieveEvent(keyPair.publicKey, eventHash as Hash);
@@ -393,12 +420,9 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
     if (!eventEnvelopePublicKeyMatches(signedEvent, keyPair.publicKey)) {
       return undefined;
     }
-    const hydrated = await hydrateSignedEvent(dependencies.crypto, keyPair.privateKey, signedEvent);
-    const next = extendFileReplayContext(state.context, [
-      { eventHash: eventHash as Hash, signedEvent: hydrated },
-    ]);
-    replayCache.set(normalizedSecret, { context: next, stale: false });
-    return next;
+    const hydrated = await hydrateSignedEvent(crypto, keyPair.privateKey, signedEvent);
+    await projection.ingest([{ eventHash: eventHash as Hash, signedEvent: hydrated }]);
+    return projection.state();
   };
 
   return {
@@ -554,7 +578,7 @@ async function addFileWithDeps(
     observedHead,
     lineages: [lineageAtPath(fs, path)],
   });
-  commitReplayEntry(normalizedSecret, entry);
+  await commitReplayEntry(normalizedSecret, entry);
 
   return {
     path,
@@ -612,7 +636,7 @@ async function mkdirWithDeps(
     [lineageAtPath(fs, path)],
     observedHead,
   );
-  commitReplayEntry(normalizedSecret, entry);
+  await commitReplayEntry(normalizedSecret, entry);
   return { path, createdAt, explicit: true };
 }
 
@@ -638,7 +662,7 @@ async function deletePathWithDeps(
     [lineageAtPath(fs, path)],
     observedHead,
   );
-  commitReplayEntry(normalizedSecret, entry);
+  await commitReplayEntry(normalizedSecret, entry);
 }
 
 async function renameWithDeps(
@@ -674,7 +698,7 @@ async function renameWithDeps(
     lineagesForRename(fs, fromPath, toPath),
     replay.observedHead,
   );
-  commitReplayEntry(normalizedSecret, entry);
+  await commitReplayEntry(normalizedSecret, entry);
 
   return { fromPath, toPath };
 }

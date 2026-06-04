@@ -304,7 +304,7 @@ async function loadChannelEntries(
  * CREATE_FILE payloads do not carry plaintext length; fill `FileMetadata.size`
  * using the blob cache or, as a last resort, decrypting live blobs (WebDAV).
  */
-async function enrichLiveFileSizes(
+export async function enrichLiveFileSizes(
   fs: MaterializedFileSystem,
   liveEncryptedKeys: ReadonlyMap<string, EncryptedData>,
   volumeSecret: Secret,
@@ -414,7 +414,7 @@ export function extendFileReplayContext(
   };
 }
 
-function applyCachedBlobSizes(fs: MaterializedFileSystem): MaterializedFileSystem {
+export function applyCachedBlobSizes(fs: MaterializedFileSystem): MaterializedFileSystem {
   const files = new Map(fs.files);
   let changed = false;
   for (const [path, meta] of files) {

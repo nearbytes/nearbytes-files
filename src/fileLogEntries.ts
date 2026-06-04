@@ -13,6 +13,84 @@ export function toCanonicalEntriesFromOrdered(entries: readonly EventLogEntry[])
   }));
 }
 
+/**
+ * Compact, JSON-serializable order key for the FILES projector
+ * (`storage/projection-engine-v1.md`). Carries everything the topological merge
+ * needs without the decrypted payload, so the projection engine can persist it
+ * and recompute insertion points cheaply.
+ */
+export interface FileOrderKey {
+  readonly hash: string;
+  /** observed-log-head parent (blockRefs[0] for a FILES verb), if any. */
+  readonly parent?: string;
+  readonly ts: number;
+  readonly isFileVerb: boolean;
+}
+
+export function fileOrderKeyForEntry(entry: EventLogEntry): FileOrderKey {
+  const isFileVerb = isFileEventEntry(entry);
+  let parent = observedLogHeadRef(entry);
+  if (parent !== undefined && isPayloadDeclaredContentRef(entry, parent)) parent = undefined;
+  const key: FileOrderKey = { hash: entry.eventHash, ts: extractTimestamp(entry, 0), isFileVerb };
+  return parent !== undefined ? { ...key, parent } : key;
+}
+
+/**
+ * Canonical FILES replay order over keys (parallel to {@link orderEventLogEntries}
+ * but operating on {@link FileOrderKey}s). Per `WIP §8` / projection-engine-v1
+ * PROJ-7, a FILES event whose observed-log-head parent is not (yet) present is
+ * treated as a root and still materialized, rather than excluded as pending.
+ */
+export function orderFileKeys(keys: readonly FileOrderKey[]): FileOrderKey[] {
+  const nodes = keys.map((key, sequence) => ({
+    key,
+    sequence,
+    children: [] as number[],
+    indegree: 0,
+  }));
+  const byHash = new Map<string, number>();
+  for (let i = 0; i < nodes.length; i += 1) byHash.set(nodes[i]!.key.hash, i);
+
+  for (let childIndex = 0; childIndex < nodes.length; childIndex += 1) {
+    const child = nodes[childIndex]!;
+    const parentHash = child.key.parent;
+    if (parentHash === undefined) continue;
+    const parentIndex = byHash.get(parentHash);
+    if (parentIndex !== undefined) {
+      nodes[parentIndex]!.children.push(childIndex);
+      child.indegree += 1;
+    }
+    // Missing parent: treat as root (materialize-on-arrival).
+  }
+
+  const cmp = (a: { key: FileOrderKey; sequence: number }, b: { key: FileOrderKey; sequence: number }): number => {
+    if (a.key.ts !== b.key.ts) return a.key.ts - b.key.ts;
+    if (a.key.hash !== b.key.hash) return a.key.hash < b.key.hash ? -1 : 1;
+    return a.sequence - b.sequence;
+  };
+
+  const ready: number[] = [];
+  for (let i = 0; i < nodes.length; i += 1) if (nodes[i]!.indegree === 0) ready.push(i);
+  ready.sort((l, r) => cmp(nodes[l]!, nodes[r]!));
+
+  const ordered: FileOrderKey[] = [];
+  while (ready.length > 0) {
+    const index = ready.shift()!;
+    const node = nodes[index]!;
+    ordered.push(node.key);
+    for (const childIndex of node.children) {
+      const child = nodes[childIndex]!;
+      child.indegree -= 1;
+      if (child.indegree === 0) {
+        let at = 0;
+        while (at < ready.length && cmp(nodes[ready[at]!]!, child) <= 0) at += 1;
+        ready.splice(at, 0, childIndex);
+      }
+    }
+  }
+  return ordered;
+}
+
 export function orderEventLogEntries(entries: readonly EventLogEntry[]): EventLogEntry[] {
   const nodes = entries.map((entry, sequence) => ({
     entry,

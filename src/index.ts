@@ -96,3 +96,8 @@ export {
   setupChannel,
 } from './operations.js';
 export { normalizeVolumePath, basename, dirname } from './pathUtils.js';
+export {
+  attachSyncInboundRefresh,
+  type SyncInboundRefreshHost,
+  type SyncInboundRefreshOptions,
+} from './syncInboundRefresh.js';

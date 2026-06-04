@@ -3,35 +3,31 @@
  * The user-facing `nbf` CLI lives in nearbytes-cli; use nearbytes-engine in apps.
  */
 
-import { createFileService, type FileService } from './fileService.js';
+import { createFileService } from './fileService.js';
 import { createReactiveVolume, type ReactiveVolume } from './reactiveVolume.js';
 import {
   createFilesystemSkeletonFromConfig,
-  type NearbytesSkeleton,
   createFilesystemWatcher,
   type VolumeWatcher,
   type NearbytesConfig,
 } from 'nearbytes-skeleton';
 import { join } from 'node:path';
 import { createSecret, bytesToHex } from 'nearbytes-crypto';
-import { access } from 'node:fs/promises';
-import { defaultPathMapper, blockPath, publicKeyFromHex } from 'nearbytes-log';
-import type { Hash } from 'nearbytes-crypto';
+import { defaultPathMapper } from 'nearbytes-log';
 import type { TimelineEvent } from './fileService.js';
-import { formatSyncEventLine, installSyncDebugBridge } from './syncDebugBridge.js';
+import { installSyncDebugBridge } from './syncDebugBridge.js';
 import { debugEnabled } from './debug.js';
-import { debugLog } from './debugLog.js';
 import {
   syncTimelineBeginSession,
   syncTimelineMarkSession,
 } from 'nearbytes-sync/node';
+import {
+  attachSyncInboundRefresh as attachFilesSyncInboundRefresh,
+  type SyncInboundRefreshHost,
+} from './syncInboundRefresh.js';
 
-export interface ProbeRuntime {
-  config: NearbytesConfig;
-  readonly skeleton: NearbytesSkeleton;
-  readonly fileService: FileService;
+export interface ProbeRuntime extends SyncInboundRefreshHost {
   activeVolume: ReactiveVolume | null;
-  readonly volumes: Map<string, ReactiveVolume>;
   readonly watchers: Map<string, VolumeWatcher>;
   /** Registered volume name → channel secret (integration probes). */
   readonly volumeRegistry: Map<string, string>;
@@ -62,6 +58,14 @@ export async function createProbeRuntime(config: NearbytesConfig): Promise<Probe
     watchers,
     volumeRegistry: new Map<string, string>(),
     lastTimelineEvents: null,
+
+    openVolumeSecrets(): Iterable<string> {
+      return rt.volumeRegistry.values();
+    },
+
+    onVolumeRefreshed(): void {
+      rt.lastTimelineEvents = null;
+    },
 
     async destroy(): Promise<void> {
       for (const w of rt.watchers.values()) w.close();
@@ -127,124 +131,7 @@ export async function refreshIfOpen(rt: ProbeRuntime, secret: string): Promise<v
 }
 
 export function attachSyncInboundRefresh(rt: ProbeRuntime): () => void {
-  const writerOnly =
-    (rt.skeleton.sync as { daemon?: unknown }).daemon !== undefined;
-  if (writerOnly) {
-    return () => {};
-  }
-
-  return rt.skeleton.sync.onEvent((event) => {
-    if (debugEnabled('sync')) {
-      debugLog('sync', 'event', formatSyncEventLine(event));
-    }
-    if (event.kind === 'block-received') {
-      void refreshAllOpenVolumes(rt);
-    } else if (event.kind === 'event-received') {
-      void maybeRefreshAfterInboundEvent(rt, event.channel.toLowerCase(), event.eventHash);
-    }
-  });
-}
-
-async function refreshAllOpenVolumes(rt: ProbeRuntime): Promise<void> {
-  for (const secret of rt.volumeRegistry.values()) {
-    const keyPair = await rt.skeleton.crypto.deriveKeys(createSecret(secret));
-    const keyHex = bytesToHex(keyPair.publicKey);
-    if (!rt.volumes.has(keyHex)) {
-      continue;
-    }
-    if (debugEnabled('sync')) {
-      debugLog('sync', 'files', `reload open volume channel=${keyHex.slice(0, 8)}…`);
-    }
-    await reloadVolumeFromDisk(rt, secret);
-  }
-}
-
-async function maybeRefreshAfterInboundEvent(
-  rt: ProbeRuntime,
-  channelHex: string,
-  eventHash: string,
-): Promise<void> {
-  if (!(await inboundEventReadyToMaterialize(rt, channelHex, eventHash))) {
-    return;
-  }
-  await refreshVolumesForChannel(rt, channelHex, eventHash);
-}
-
-async function inboundEventReadyToMaterialize(
-  rt: ProbeRuntime,
-  channelHex: string,
-  eventHash: string,
-): Promise<boolean> {
-  const pk = publicKeyFromHex(channelHex);
-  if (pk === null) {
-    return false;
-  }
-  try {
-    const signed = await rt.skeleton.log.events.retrieveEvent(pk, eventHash as Hash);
-    const refs = signed.envelope.blockRefs.map((h) => String(h).toLowerCase());
-    if (refs.length === 0) {
-      return true;
-    }
-    const known = new Set(
-      (await rt.skeleton.log.events.listEvents(pk)).map((h) => h.toLowerCase()),
-    );
-    const headRef = refs[0]!;
-    const blockReady = async (hash: string): Promise<boolean> => {
-      if (await rt.skeleton.log.blocks.has(hash as Hash)) {
-        return true;
-      }
-      try {
-        await access(join(rt.config.dataDir, blockPath(hash as Hash)));
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    if (refs.length === 1) {
-      return blockReady(headRef);
-    }
-    if (!known.has(headRef)) {
-      return false;
-    }
-    for (const hash of refs.slice(1)) {
-      if (known.has(hash)) {
-        continue;
-      }
-      if (!(await blockReady(hash))) {
-        return false;
-      }
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function refreshVolumesForChannel(
-  rt: ProbeRuntime,
-  channelHex: string,
-  eventHash: string,
-): Promise<void> {
-  for (const secret of rt.volumeRegistry.values()) {
-    const keyPair = await rt.skeleton.crypto.deriveKeys(createSecret(secret));
-    if (bytesToHex(keyPair.publicKey).toLowerCase() !== channelHex) {
-      continue;
-    }
-    const keyHex = bytesToHex(keyPair.publicKey);
-    if (!rt.volumes.has(keyHex)) {
-      continue;
-    }
-    if (debugEnabled('sync')) {
-      debugLog('sync', 'files', `reload open volume channel=${channelHex.slice(0, 8)}…`);
-    }
-    const replay = await rt.fileService.applyInboundEvent(secret, eventHash);
-    if (replay !== undefined) {
-      rt.lastTimelineEvents = null;
-      rt.volumes.get(keyHex)!.applyMaterialized(replay.fs);
-      continue;
-    }
-    await reloadVolumeFromDisk(rt, secret);
-  }
+  return attachFilesSyncInboundRefresh(rt);
 }
 
 /** @deprecated Use {@link createProbeRuntime}. */

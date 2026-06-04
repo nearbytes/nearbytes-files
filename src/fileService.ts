@@ -312,27 +312,6 @@ interface StoredTimelineRow {
   message?: ChatMessage;
 }
 
-const HYDRATE_CONCURRENCY = 128;
-
-/** Map with bounded concurrency, preserving input order in the result. */
-async function mapWithConcurrency<T, R>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const out = new Array<R>(items.length);
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    for (;;) {
-      const index = next++;
-      if (index >= items.length) return;
-      out[index] = await fn(items[index]!);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
-  return out;
-}
-
 /**
  * Creates a dependency-injected file service for testing or custom storage.
  */
@@ -348,40 +327,9 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
   const dirty = new Set<string>();
   const norm = (secret: string): string => normalizeSecret(secret) as unknown as string;
 
-  /**
-   * Catch up the projection with channel events not yet in its order index.
-   * Cold (no persisted state) ⇒ full replay; warm ⇒ only the unknown tail.
-   * This is the only place that may read the whole channel, and only on first
-   * access of a channel with no persisted state.
-   */
-  const catchUp = async (projection: FileProjection, secret: string): Promise<void> => {
-    const keyPair = await crypto.deriveKeys(createSecret(secret));
-    const listed = await channelStorage.events.listEvents(keyPair.publicKey);
-    const unknown = listed.filter((hash) => !projection.has(hash));
-    if (unknown.length === 0) return;
-    // Hydrate with bounded concurrency; trusted replay skips per-event ECDSA
-    // re-verify (events were verified at reception/emit; the content-address
-    // hash is still checked on read).
-    const hydrated = await mapWithConcurrency(unknown, HYDRATE_CONCURRENCY, async (hash) => {
-      try {
-        const signedEvent = await channelStorage.events.retrieveEvent(keyPair.publicKey, hash, {
-          verifySignature: false,
-        });
-        if (!eventEnvelopePublicKeyMatches(signedEvent, keyPair.publicKey)) return undefined;
-        return {
-          eventHash: hash,
-          signedEvent: await hydrateSignedEvent(crypto, keyPair.privateKey, signedEvent),
-        } satisfies import('nearbytes-log').EventLogEntry;
-      } catch {
-        return undefined;
-      }
-    });
-    const entries = hydrated.filter(
-      (entry): entry is import('nearbytes-log').EventLogEntry => entry !== undefined,
-    );
-    if (entries.length > 0) await projection.ingest(entries);
-  };
-
+  // Catch-up (list + trusted, bounded-parallel hydrate + ingest) is shared in the
+  // projection engine (`projection.catchUp()`); the service never reimplements it.
+  // Cold (no persisted state) ⇒ full replay; warm ⇒ only the unknown tail.
   const ensureProjection = (secret: string): Promise<FileProjection> => {
     const key = norm(secret);
     let pending = projections.get(key);
@@ -389,7 +337,7 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
       pending = (async () => {
         const channel = await openChannel(createSecret(secret), crypto);
         const projection = await createProjection(channelStorage, channel, crypto, projector, store, { now });
-        await catchUp(projection, secret);
+        await projection.catchUp();
         return projection;
       })();
       projections.set(key, pending);
@@ -402,7 +350,7 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
     opts?: { readonly enrichSizes?: boolean; readonly throughEventHash?: string },
   ): Promise<import('./fileEmit.js').FileReplayContext> => {
     const projection = await ensureProjection(secret);
-    if (dirty.delete(norm(secret))) await catchUp(projection, secret);
+    if (dirty.delete(norm(secret))) await projection.catchUp();
     let ctx = projection.state();
     if (opts?.throughEventHash !== undefined) {
       return replayContextThrough(ctx, opts.throughEventHash, { enrichSizes: opts.enrichSizes === true });

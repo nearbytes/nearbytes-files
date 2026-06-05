@@ -48,7 +48,7 @@
   "dependencies": {
     "nearbytes-chat": "github:nearbytes/nearbytes-chat",
     "nearbytes-crypto": "github:nearbytes/nearbytes-crypto",
-    "nearbytes-log": "https://github.com/nearbytes/nearbytes-log.git#commit=f95575fdb7f5ce5e383870d3a6977a8a7820c567",
+    "nearbytes-log": "https://github.com/nearbytes/nearbytes-log.git#commit=0a1bef159ead34b542d20af74b8473e2232a90e2",
     "nearbytes-skeleton": "github:nearbytes/nearbytes-skeleton"
   },
   "devDependencies": {

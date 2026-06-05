@@ -1,0 +1,50 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"path": "../nearbytes-app"
+		},
+		{
+			"path": "../nearbytes-benchmarks"
+		},
+		{
+			"path": "../nearbytes-chat"
+		},
+		{
+			"path": "../nearbytes-cli"
+		},
+		{
+			"path": "../nearbytes-components"
+		},
+		{
+			"path": "../nearbytes-crypto"
+		},
+		{
+			"path": "../nearbytes-design"
+		},
+		{
+			"path": "../nearbytes-engine"
+		},
+		{
+			"path": "."
+		},
+		{
+			"path": "../nearbytes-log"
+		},
+		{
+			"path": "../nearbytes-skeleton"
+		},
+		{
+			"path": "../nearbytes-specs"
+		},
+		{
+			"path": "../nearbytes-sync"
+		},
+		{
+			"path": "../nearbytes-widgets"
+		}
+	],
+	"settings": {}
+}

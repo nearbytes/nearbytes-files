@@ -26,3 +26,6 @@ tmp*.png
 tmp*.bin
 tmp
 b.jpeg
+
+# macOS
+.DS_Store

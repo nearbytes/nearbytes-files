@@ -52,6 +52,12 @@ export function formatSyncEventLine(event: SyncEvent): string {
           ? ` profile=${shortHex(event.remoteProfilePublicKey)}`
           : '')
       );
+    case 'peer-stalled':
+      return (
+        `peer-stalled reason=${event.reason} role=${event.role} ` +
+        `profile=${shortHex(event.remoteProfilePublicKey)} ` +
+        `inst=${shortHex(event.remoteInstancePublicKey)} via ${event.transportLabel}`
+      );
     case 'block-sent':
       return (
         `block-sent hash=${shortHex(event.blockHash)} bytes=${event.bytes} ` +

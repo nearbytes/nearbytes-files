@@ -524,14 +524,20 @@ __metadata:
   languageName: node
   linkType: hard
 
+"nearbytes-crypto@link:../nearbytes-crypto::locator=nearbytes-files%40workspace%3A.":
+  version: 0.0.0-use.local
+  resolution: "nearbytes-crypto@link:../nearbytes-crypto::locator=nearbytes-files%40workspace%3A."
+  languageName: node
+  linkType: soft
+
 "nearbytes-files@workspace:.":
   version: 0.0.0-use.local
   resolution: "nearbytes-files@workspace:."
   dependencies:
     "@types/node": "npm:^20.10.0"
     nearbytes-chat: "https://github.com/nearbytes/nearbytes-chat.git#commit=6892ff741b7af37796b529d04cbb00fe2064f3d3"
-    nearbytes-crypto: "github:nearbytes/nearbytes-crypto"
-    nearbytes-log: "https://github.com/nearbytes/nearbytes-log.git#commit=0a1bef159ead34b542d20af74b8473e2232a90e2"
+    nearbytes-crypto: "link:../nearbytes-crypto"
+    nearbytes-log: "link:../nearbytes-log"
     nearbytes-skeleton: "https://github.com/nearbytes/nearbytes-skeleton.git#commit=c6cf3e968c57e3c11bdfb913778befa53f4477bd"
     typescript: "npm:^5.3.2"
   languageName: unknown
@@ -545,6 +551,12 @@ __metadata:
   checksum: 10c0/008063809d8ead3fe120cba7f518b0eb17857526422caeda02a72d2b8048e68c9634663a3cb1276fbcd4254b6dec97bd6bc6a517afdb9afbf9f6113e86a95911
   languageName: node
   linkType: hard
+
+"nearbytes-log@link:../nearbytes-log::locator=nearbytes-files%40workspace%3A.":
+  version: 0.0.0-use.local
+  resolution: "nearbytes-log@link:../nearbytes-log::locator=nearbytes-files%40workspace%3A."
+  languageName: node
+  linkType: soft
 
 "nearbytes-skeleton@https://github.com/nearbytes/nearbytes-skeleton.git#commit=c6cf3e968c57e3c11bdfb913778befa53f4477bd":
   version: 0.1.0

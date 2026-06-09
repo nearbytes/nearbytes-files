@@ -115,7 +115,6 @@ async function inboundEventReadyToMaterialize(
     if (refs.length === 0) {
       return true;
     }
-    const known = new Set((await log.events.listEvents(pk)).map((h) => h.toLowerCase()));
     const headRef = refs[0]!;
     const blockReady = async (hash: string): Promise<boolean> => {
       if (await log.blocks.has(hash as Hash)) {
@@ -131,13 +130,10 @@ async function inboundEventReadyToMaterialize(
     if (refs.length === 1) {
       return blockReady(headRef);
     }
-    if (!known.has(headRef)) {
+    if (!(await log.events.hasEvent(pk, headRef as Hash))) {
       return false;
     }
     for (const hash of refs.slice(1)) {
-      if (known.has(hash)) {
-        continue;
-      }
       if (!(await blockReady(hash))) {
         return false;
       }

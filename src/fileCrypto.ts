@@ -1,6 +1,6 @@
 import type { CryptoOperations } from 'nearbytes-crypto';
-import type { EncryptedData } from 'nearbytes-crypto';
-import { createEncryptedData } from 'nearbytes-crypto';
+import type { EncryptedData, Hash } from 'nearbytes-crypto';
+import { createEncryptedData, encryptSymWithHash } from 'nearbytes-crypto';
 import type { PrivateKey, PublicKey, SymmetricKey } from 'nearbytes-crypto';
 import { createPublicKey, createSymmetricKey } from 'nearbytes-crypto';
 import { bytesToHex, bytesToBase64Url, base64UrlToBytes, hexToBytes } from 'nearbytes-crypto';
@@ -17,6 +17,7 @@ export interface EncryptedFileWrite {
   readonly encryptedData: EncryptedData;
   readonly encryptedKey: EncryptedData;
   readonly contentType: 'b';
+  readonly blobHash: Hash;
 }
 
 export interface RecipientKeyCapsuleBytes {
@@ -32,12 +33,13 @@ export async function encryptFileForVolume(
   data: Uint8Array
 ): Promise<EncryptedFileWrite> {
   const fileKey = await crypto.generateSymmetricKey();
-  const encryptedData = await crypto.encryptSym(data, fileKey);
-  const encryptedKey = await wrapFileKeyForVolume(crypto, volumePrivateKey, fileKey);
-  // The encrypted block's content-address is owned by the log; callers
-  // obtain the `blobHash` from `Log.blocks.store(encryptedData, ...)`.
+  const [bulk, encryptedKey] = await Promise.all([
+    encryptSymWithHash(data, fileKey),
+    wrapFileKeyForVolume(crypto, volumePrivateKey, fileKey),
+  ]);
   return {
-    encryptedData,
+    encryptedData: bulk.encrypted,
+    blobHash: bulk.hash,
     encryptedKey,
     contentType: 'b',
   };

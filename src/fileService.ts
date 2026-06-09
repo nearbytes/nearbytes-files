@@ -50,7 +50,9 @@ import {
 import { observedLogHead, orderEventLogEntries, toCanonicalEntries } from './fileLogEntries.js';
 import {
   emitFileEvent,
+  extendFileReplayContext,
   type CausalLineage,
+  type FileReplayContext,
   replayContextThrough,
   enrichLiveFileSizes,
   lineagesForRename,
@@ -322,9 +324,11 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
   const store = dependencies.store ?? createInMemoryMaterializedStore();
   const projector = createFilesProjector();
 
-  type FileProjection = Projection<import('./fileEmit.js').FileReplayContext>;
+  type FileProjection = Projection<FileReplayContext>;
   const projections = new Map<string, Promise<FileProjection>>();
   const dirty = new Set<string>();
+  /** In-process tail ahead of async projection.ingest (sequential publish hot path). */
+  const replayTail = new Map<string, FileReplayContext>();
   const norm = (secret: string): string => normalizeSecret(secret) as unknown as string;
 
   // Catch-up (list + trusted, bounded-parallel hydrate + ingest) is shared in the
@@ -348,10 +352,14 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
   const getReplayContext = async (
     secret: string,
     opts?: { readonly enrichSizes?: boolean; readonly throughEventHash?: string },
-  ): Promise<import('./fileEmit.js').FileReplayContext> => {
+  ): Promise<FileReplayContext> => {
+    const key = norm(secret);
     const projection = await ensureProjection(secret);
-    if (dirty.delete(norm(secret))) await projection.catchUp();
-    let ctx = projection.state();
+    if (dirty.delete(key)) {
+      replayTail.delete(key);
+      await projection.catchUp();
+    }
+    let ctx = replayTail.get(key) ?? projection.state();
     if (opts?.throughEventHash !== undefined) {
       return replayContextThrough(ctx, opts.throughEventHash, { enrichSizes: opts.enrichSizes === true });
     }
@@ -370,14 +378,19 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
 
   /** External writes (other process / nbsync) bypass our router; re-scan on next read. */
   const markReplayStale = (secret: string): void => {
-    dirty.add(norm(secret));
+    const key = norm(secret);
+    dirty.add(key);
+    replayTail.delete(key);
   };
 
   const commitReplayEntry = async (
     secret: string,
     entry: import('nearbytes-log').EventLogEntry,
   ): Promise<void> => {
+    const key = norm(secret);
     const projection = await ensureProjection(secret);
+    const base = replayTail.get(key) ?? projection.state();
+    replayTail.set(key, extendFileReplayContext(base, [entry]));
     await projection.ingest([entry]);
   };
 
@@ -537,16 +550,21 @@ async function addFileWithDeps(
   const path = resolveAddPath(rawPath, opts);
   const normalizedSecret = normalizeSecret(secret);
 
-  const keyPair = await crypto.deriveKeys(normalizedSecret);
+  const [keyPair, { fs, observedHead }] = await Promise.all([
+    crypto.deriveKeys(normalizedSecret),
+    getReplayContext(normalizedSecret),
+  ]);
   const encrypted = await encryptFileForVolume(crypto, keyPair.privateKey, data);
-  const blobHash = await channelStorage.blocks.store(encrypted.encryptedData, true);
-  rememberBlobPlaintextSize(blobHash, data.length);
-
   const createdAt = now();
-  const { fs, observedHead } = await getReplayContext(normalizedSecret);
+  rememberBlobPlaintextSize(encrypted.blobHash, data.length);
+  await channelStorage.blocks.storeAlreadyVerified(
+    encrypted.blobHash,
+    encrypted.encryptedData,
+    true,
+  );
   const entry = await appendCreateEvent(channelStorage, crypto, keyPair, {
     path,
-    blobHash,
+    blobHash: encrypted.blobHash,
     encryptedKey: encrypted.encryptedKey,
     contentType: encrypted.contentType,
     mimeType: opts?.mimeType,
@@ -558,7 +576,7 @@ async function addFileWithDeps(
 
   return {
     path,
-    blobHash,
+    blobHash: encrypted.blobHash,
     contentType: encrypted.contentType,
     size: data.length,
     mimeType: opts?.mimeType,
@@ -1441,11 +1459,15 @@ async function upgradeLegacyFilesForExport(
       file.encryptedKey,
     );
     const encrypted = await encryptFileForVolume(crypto, keyPair.privateKey, plaintext);
-    const blobHash = await channelStorage.blocks.store(encrypted.encryptedData, true);
+    await channelStorage.blocks.storeAlreadyVerified(
+      encrypted.blobHash,
+      encrypted.encryptedData,
+      true,
+    );
     const fs = runMaterialization(toCanonicalEntries(entries));
     const entry = await appendCreateEvent(channelStorage, crypto, keyPair, {
       path: file.path,
-      blobHash,
+      blobHash: encrypted.blobHash,
       encryptedKey: encrypted.encryptedKey,
       contentType: encrypted.contentType,
       mimeType: file.mimeType,

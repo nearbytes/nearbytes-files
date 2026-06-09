@@ -9,7 +9,7 @@ import { EventType, type EncryptedData } from 'nearbytes-crypto';
 import type { Log } from 'nearbytes-log';
 import type { Channel, EventLogEntry } from 'nearbytes-log';
 import {
-  createSignedEvent,
+  createSignedEventPrepared,
   eventEnvelopePublicKeyMatches,
   hydrateSignedEvent,
   loadEventLog,
@@ -365,9 +365,13 @@ export async function emitFileEvent(
   introducedBlocks: readonly Hash[],
 ): Promise<EventLogEntry> {
   const blockRefs = buildBlockRefs(observedHead, lineages, introducedBlocks);
-  const signedEvent = await createSignedEvent(crypto, keyPair, payload, blockRefs);
-  const eventHash = await log.events.storeEvent(keyPair.publicKey, signedEvent);
-  return { eventHash, signedEvent };
+  const prepared = await createSignedEventPrepared(crypto, keyPair, payload, blockRefs);
+  const eventHash = await log.events.storeEvent(
+    keyPair.publicKey,
+    prepared.event,
+    prepared.eventHash,
+  );
+  return { eventHash, signedEvent: prepared.event };
 }
 
 /**

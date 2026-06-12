@@ -29,6 +29,7 @@
     "refresh": "node scripts/refresh.mjs",
     "update": "node scripts/update.mjs",
     "dev": "node scripts/dev-bootstrap.mjs && tsc --watch --preserveWatchOutput",
+    "dev-local": "NEARBYTES_LOCAL_DEPS=1 node scripts/dev-bootstrap.mjs && tsc --watch --preserveWatchOutput",
     "dev:fast": "tsc --watch --preserveWatchOutput",
     "probe:sync-matrix": "yarn build && node scripts/sync-matrix-probe.mjs",
     "probe:offline-reopen": "yarn build && node scripts/offline-reopen-probe.mjs",

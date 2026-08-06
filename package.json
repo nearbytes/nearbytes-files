@@ -47,10 +47,10 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "nearbytes-chat": "https://github.com/nearbytes/nearbytes-chat.git#commit=6892ff741b7af37796b529d04cbb00fe2064f3d3",
+    "nearbytes-chat": "https://github.com/nearbytes/nearbytes-chat.git#commit=f93cefb0b6bdf91c16de4b20c6a83841fdda0f0b",
     "nearbytes-crypto": "https://github.com/nearbytes/nearbytes-crypto.git#commit=9b2c1936589d2d8b049f0ca39e76513eba4ded9a",
     "nearbytes-log": "https://github.com/nearbytes/nearbytes-log.git#commit=18ac65defb5f45ae03bfb64632ce1a65f20424d3",
-    "nearbytes-skeleton": "https://github.com/nearbytes/nearbytes-skeleton.git#commit=a5f759c62dc0b303606ca10ced07777fd69bc3ec"
+    "nearbytes-skeleton": "https://github.com/nearbytes/nearbytes-skeleton.git#commit=7bbd6d7756bc8481cf21071bc9dea7554f83aed0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

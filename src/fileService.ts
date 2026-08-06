@@ -17,6 +17,7 @@ import {
   parseChatMessageJson,
   parseIdentityRecordJson,
   parseIdentitySnapshotJson,
+  verifyIdentityRecord,
   type ChatMessage,
   type IdentityRecord,
 } from 'nearbytes-chat';
@@ -118,6 +119,14 @@ export interface TimelineEvent {
   summary?: string;
   record?: IdentityRecord;
   message?: ChatMessage;
+  /**
+   * Signature-verification result for identity rows (`record` present).
+   * `true` means the display name is signed by the profile key it claims;
+   * `false` means it is forged or corrupt and `displayName` has been cleared.
+   * `undefined` means no verification pass ran (raw projection only) — such a
+   * row's `displayName` MUST NOT be treated as authentic.
+   */
+  verified?: boolean;
   /**
    * Materializer rejection record for this event. When set, the event was
    * recorded on the timeline but did *not* affect the materialized
@@ -490,9 +499,9 @@ export function createFileService(dependencies: FileServiceDependencies): FileSe
     computeSnapshot: async (secret) =>
       computeSnapshotWithDeps(secret, now, getReplayContext),
     getTimeline: async (secret) =>
-      getTimelineWithDeps(secret, getReplayContext),
+      getTimelineWithDeps(secret, getReplayContext, crypto),
     getTimelineDelta: async (secret, afterEventHash) =>
-      getTimelineDeltaWithDeps(secret, afterEventHash, getReplayContext),
+      getTimelineDeltaWithDeps(secret, afterEventHash, getReplayContext, crypto),
     getEvent: async (secret, eventHash) =>
       getEventWithDeps(secret, eventHash, dependencies.crypto, channelStorage),
     exportSourceReferences: async (secret, paths) =>
@@ -806,21 +815,68 @@ async function computeSnapshotWithDeps(
   };
 }
 
+/**
+ * Authenticates identity rows in place (mutates `timeline`).
+ *
+ * `buildTimelineRows` is synchronous and can only *parse* identity payloads;
+ * signature checking needs crypto and is async. Parsing alone is not enough
+ * to trust a name: a channel's events are signed with the channel keypair,
+ * which every member of that channel holds, so `authorPublicKey` is an
+ * unauthenticated claim and any member could otherwise publish a display
+ * name under somebody else's profile key.
+ *
+ * The record's own profile-key signature is the only thing that authenticates
+ * the name, so it is checked here and `displayName` is cleared when it fails.
+ * This covers all three identity shapes (`DECLARE_IDENTITY`,
+ * `nb.identity.record.v1`, `nb.identity.snapshot.v1`) because each stores the
+ * inner record on the row.
+ */
+async function verifyTimelineIdentities(
+  timeline: TimelineEvent[],
+  crypto: CryptoOperations,
+): Promise<TimelineEvent[]> {
+  for (const event of timeline) {
+    if (event.record === undefined) {
+      continue;
+    }
+    let ok = false;
+    try {
+      ok = await verifyIdentityRecord(crypto, event.record);
+    } catch {
+      ok = false;
+    }
+    event.verified = ok;
+    if (!ok) {
+      event.displayName = undefined;
+      event.summary = 'Unverified identity — rejected';
+    }
+  }
+  return timeline;
+}
+
 async function getTimelineWithDeps(
   secret: string,
   getReplayContext: (secret: string) => Promise<import('./fileEmit.js').FileReplayContext>,
+  crypto: CryptoOperations,
 ): Promise<TimelineEvent[]> {
   const replay = await getReplayContext(normalizeSecret(secret));
-  return mapEntriesToTimeline([...replay.orderedEntries], replay.fs);
+  return verifyTimelineIdentities(
+    mapEntriesToTimeline([...replay.orderedEntries], replay.fs),
+    crypto,
+  );
 }
 
 async function getTimelineDeltaWithDeps(
   secret: string,
   afterEventHash: string | null | undefined,
   getReplayContext: (secret: string) => Promise<import('./fileEmit.js').FileReplayContext>,
+  crypto: CryptoOperations,
 ): Promise<TimelineDelta> {
   const replay = await getReplayContext(normalizeSecret(secret));
-  const timeline = mapEntriesToTimeline([...replay.orderedEntries]);
+  const timeline = await verifyTimelineIdentities(
+    mapEntriesToTimeline([...replay.orderedEntries]),
+    crypto,
+  );
   const requestedCursor = normalizeTimelineCursor(afterEventHash);
   const nextCursor = timeline.at(-1)?.eventHash ?? null;
 

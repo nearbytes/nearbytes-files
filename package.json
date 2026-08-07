@@ -1,7 +1,7 @@
 {
   "name": "nearbytes-files",
   "version": "0.1.0",
-  "description": "Nearbytes file protocol — encrypted file storage on top of the event log, with reactive volume",
+  "description": "Nearbytes file protocol \u2014 encrypted file storage on top of the event log, with reactive volume",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -40,7 +40,8 @@
     "probe:cold-restart-propagation": "yarn build && node scripts/cold-restart-propagation-probe.mjs",
     "probe:cold-restart": "yarn build && node scripts/cold-restart-propagation-run.mjs",
     "resync-wipe": "node scripts/resync-wipe.mjs",
-    "resync-wipe:dry": "node scripts/resync-wipe.mjs --dry-run"
+    "resync-wipe:dry": "node scripts/resync-wipe.mjs --dry-run",
+    "test": "tsc && node --test test/*.test.mjs"
   },
   "license": "MIT",
   "engines": {

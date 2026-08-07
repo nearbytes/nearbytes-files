@@ -1,7 +1,7 @@
 {
   "name": "nearbytes-files",
   "version": "0.1.0",
-  "description": "Nearbytes file protocol \u2014 encrypted file storage on top of the event log, with reactive volume",
+  "description": "Nearbytes file protocol — encrypted file storage on top of the event log, with reactive volume",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -48,10 +48,10 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "nearbytes-chat": "https://github.com/nearbytes/nearbytes-chat.git#commit=f93cefb0b6bdf91c16de4b20c6a83841fdda0f0b",
+    "nearbytes-chat": "https://github.com/nearbytes/nearbytes-chat.git#commit=31647941e797af7985a2a68c72485d8951606027",
     "nearbytes-crypto": "https://github.com/nearbytes/nearbytes-crypto.git#commit=9b2c1936589d2d8b049f0ca39e76513eba4ded9a",
-    "nearbytes-log": "https://github.com/nearbytes/nearbytes-log.git#commit=18ac65defb5f45ae03bfb64632ce1a65f20424d3",
-    "nearbytes-skeleton": "https://github.com/nearbytes/nearbytes-skeleton.git#commit=dd52708a6d080d2b5c012cbca075975fcbf528c2"
+    "nearbytes-log": "https://github.com/nearbytes/nearbytes-log.git#commit=31fb75e3877ef762566216a0ceace294329d6295",
+    "nearbytes-skeleton": "https://github.com/nearbytes/nearbytes-skeleton.git#commit=9531ab1a0fd89b12f977f32220697b5b886c64a4"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
